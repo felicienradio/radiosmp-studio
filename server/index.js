@@ -14,6 +14,8 @@ import { authRoutes, requireAuth, changePassword } from './auth.js';
 import { relayStream, playlist, relayCount } from './streamproxy.js';
 import { updateStatus, requestUpdate } from './update.js';
 import { brandingRoutes } from './branding.js';
+import { AutoDJ } from './autodj/engine.js';
+import { autodjRoutes, autodjConfig } from './autodj/routes.js';
 
 const settings = loadSettings();
 const ice = () => getSettings().icecast;
@@ -21,6 +23,13 @@ const proc = new IcecastProcess(ice, (level, type, msg) => logEvent(level, type,
 // Tant qu'Icecast n'a pas été redémarré, on l'interroge avec les réglages qu'il utilise réellement
 const api = new IcecastApi(() => (ice().managed && proc.state === 'running' && proc.applied) || ice());
 const collector = new Collector({ api, proc, getSettings });
+const autodj = new AutoDJ({
+  getConfig: autodjConfig,
+  // réglages avec lesquels Icecast tourne réellement (port, mots de passe des flux)
+  getIcecast: () => (proc.state === 'running' && proc.applied) || ice(),
+  api,
+  log: (level, type, msg) => logEvent(level, type, msg),
+});
 
 await initGeo();
 // Sessions enregistrées avant l'ajout du type d'appareil
@@ -87,6 +96,11 @@ function broadcast(event, data) {
   for (const c of clients) c.write(msg);
 }
 collector.on('update', (live) => broadcast('live', { ...live, point: collector.history.at(-1), process: proc.status(), links: links() }));
+let autodjTimer = null;
+autodj.on('change', () => {
+  clearTimeout(autodjTimer);
+  autodjTimer = setTimeout(() => broadcast('autodj', autodj.status()), 150);
+});
 proc.on('state', (status) => broadcast('process', status));
 setInterval(() => broadcast('ping', Date.now()), 25_000);
 
@@ -361,6 +375,8 @@ app.post('/api/update/run', wrap(() => {
 
 // ---------- Interface ----------
 
+autodjRoutes(app, { wrap, autodj, logEvent, proc });
+
 // ---------- Flux relayés ----------
 // https://<domaine du dashboard>/live → Icecast, pour servir les flux en HTTPS via le reverse proxy du dashboard.
 
@@ -402,6 +418,7 @@ const server = app.listen(port, host, async () => {
   logEvent('info', 'dashboard', 'Dashboard démarré');
   await proc.init().catch((err) => console.error(err.message));
   collector.start();
+  if (autodjConfig().enabled) autodj.start().catch((err) => console.error('AutoDJ :', err.message));
 });
 server.on('error', (err) => {
   console.error(`Impossible d'écouter sur ${host}:${port} : ${err.message}`);

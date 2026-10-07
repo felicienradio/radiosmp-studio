@@ -53,7 +53,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 step "Paquets de base"
 apt-get update -q
-apt-get install -y -q --no-install-recommends ca-certificates curl gnupg rsync git openssh-client
+apt-get install -y -q --no-install-recommends ca-certificates curl gnupg rsync git openssh-client ffmpeg
 
 step "Icecast"
 # On refuse la configuration interactive du paquet : c'est Flux qui génère la configuration

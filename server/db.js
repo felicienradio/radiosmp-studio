@@ -66,6 +66,45 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 `);
 
+// AutoDJ : bibliothèque musicale, playlists, grille horaire
+db.exec(`
+  CREATE TABLE IF NOT EXISTS media (
+    id INTEGER PRIMARY KEY,
+    file TEXT NOT NULL UNIQUE,
+    original_name TEXT,
+    title TEXT,
+    artist TEXT,
+    album TEXT,
+    duration REAL,
+    bitrate INTEGER,
+    size INTEGER,
+    added_at INTEGER NOT NULL,
+    plays INTEGER NOT NULL DEFAULT 0,
+    last_played INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS playlists (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'music',
+    shuffle INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS playlist_items (
+    playlist_id INTEGER NOT NULL,
+    media_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, media_id)
+  );
+  CREATE TABLE IF NOT EXISTS schedule (
+    id INTEGER PRIMARY KEY,
+    playlist_id INTEGER NOT NULL,
+    days TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
+  );
+`);
+
 // Migrations : colonnes ajoutées après la première version
 const sessionCols = new Set(db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name));
 for (const [col, type] of [['device', 'TEXT'], ['city', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL']]) {
