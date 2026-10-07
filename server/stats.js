@@ -1,15 +1,18 @@
+import isoCountries from 'i18n-iso-countries';
 import { db } from './db.js';
+import { parts, bucketStart, startOfDay, daysBetween, fmtDate, tz } from './time.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
-// Les connexions plus courtes sont des sondes de lecteurs / prévisualisations,
-// exclues des comptages de sessions (mais comptées dans les heures d'écoute).
+// Les connexions plus courtes sont des sondes de lecteurs / prévisualisations : elles comptent
+// comme connexions, mais pas dans les durées d'écoute moyennes ni dans la répartition des durées.
 export const MIN_SESSION_MS = 5_000;
 
 db.exec('CREATE INDEX IF NOT EXISTS sessions_ip ON sessions(ip)');
 
-const RANGES = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY, '90d': 90 * DAY, '365d': 365 * DAY };
+const ROLLING = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY };
+const CALENDAR = { '7d': 7, '30d': 30, '90d': 90, '365d': 365 };
 
 export function parseRange(query) {
   const now = Date.now();
@@ -18,8 +21,11 @@ export function parseRange(query) {
   if (query.from && query.to) {
     from = Number(query.from);
     to = Math.min(Number(query.to), now);
+  } else if (CALENDAR[query.range]) {
+    // Périodes en jours : journées complètes, aujourd'hui inclus (comme un rapport d'audience)
+    from = startOfDay(now - (CALENDAR[query.range] - 1) * DAY);
   } else {
-    from = now - (RANGES[query.range] || DAY);
+    from = now - (ROLLING[query.range] || DAY);
   }
   if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new Error('Période invalide');
   const span = to - from;
@@ -29,190 +35,303 @@ export function parseRange(query) {
     : span <= 8 * DAY ? HOUR
     : span <= 31 * DAY ? 4 * HOUR
     : DAY;
-  return { from, to, bucket, mount: query.mount || null };
-}
-
-function tzOffset(ts) {
-  return -new Date(ts).getTimezoneOffset() * MIN;
+  return { from, to, bucket, mount: query.mount || null, tz: tz() };
 }
 
 const mountFilter = (mount, col = 'mount') => (mount ? ` AND ${col} = :mount` : '');
-
 function params(r, extra = {}) {
   const p = { from: r.from, to: r.to, ...extra };
   if (r.mount) p.mount = r.mount;
   return p;
 }
 
-/** Courbe d'audience : moyenne et maximum d'auditeurs simultanés par intervalle. */
-export function series(r) {
-  const off = r.bucket >= DAY ? tzOffset(r.to) : 0;
-  const rows = db.prepare(`
-    SELECT CAST((ts + :off) / :b AS INTEGER) * :b - :off AS t, SUM(tot_avg) AS sum_avg, MAX(tot_max) AS max, SUM(bytes) AS bytes
-    FROM (SELECT ts, SUM(listeners_avg) AS tot_avg, SUM(listeners_max) AS tot_max, SUM(bytes_sent) AS bytes
-          FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)} GROUP BY ts)
-    GROUP BY t ORDER BY t`).all(params(r, { b: r.bucket, off }));
-  const byT = new Map(rows.map((x) => [x.t, x]));
+function bucketsOf(r) {
+  if (r.bucket >= DAY) return daysBetween(r.from, r.to);
   const out = [];
-  const start = Math.floor((r.from + off) / r.bucket) * r.bucket - off;
-  for (let t = start; t < r.to; t += r.bucket) {
-    const x = byT.get(t);
-    const minutes = Math.max(1, (Math.min(t + r.bucket, r.to) - Math.max(t, r.from)) / MIN);
-    out.push({
-      t,
-      avg: x ? Math.round((x.sum_avg / minutes) * 100) / 100 : 0,
-      max: x ? x.max : 0,
-      bytes: x ? x.bytes : 0,
-    });
+  for (let t = bucketStart(r.from, r.bucket); t < r.to; t += r.bucket) out.push(t);
+  return out;
+}
+
+const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+
+// ---------------------------------------------------------------------------
+// Audience (échantillons minute par minute)
+// ---------------------------------------------------------------------------
+
+function audience(r) {
+  const rows = db.prepare(`
+    SELECT ts, mount, listeners_avg AS a, listeners_max AS m, bytes_sent AS b
+    FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)} ORDER BY ts`).all(params(r));
+
+  const perTs = new Map();
+  const mountNames = new Set();
+  for (const x of rows) {
+    let p = perTs.get(x.ts);
+    if (!p) perTs.set(x.ts, (p = { a: 0, m: 0, b: 0, mounts: {} }));
+    p.a += x.a;
+    p.m += x.m;
+    p.b += x.b;
+    p.mounts[x.mount] = x.a;
+    mountNames.add(x.mount);
+  }
+
+  const buckets = bucketsOf(r);
+  const idx = new Map(buckets.map((t, i) => [t, i]));
+  const sumA = new Array(buckets.length).fill(0);
+  const maxM = new Array(buckets.length).fill(0);
+  const bytes = new Array(buckets.length).fill(0);
+  const perMount = Object.fromEntries([...mountNames].map((m) => [m, new Array(buckets.length).fill(0)]));
+  const heatSum = Array.from({ length: 7 }, () => new Array(24).fill(0));
+
+  let peak = 0;
+  let peakAt = null;
+  let listenerMinutes = 0;
+  let totalBytes = 0;
+  for (const [ts, p] of perTs) {
+    const i = idx.get(bucketStart(ts, r.bucket));
+    if (i !== undefined) {
+      sumA[i] += p.a;
+      maxM[i] = Math.max(maxM[i], p.m);
+      bytes[i] += p.b;
+      for (const [m, a] of Object.entries(p.mounts)) perMount[m][i] += a;
+    }
+    const lp = parts(ts);
+    heatSum[lp.dow][lp.hour] += p.a;
+    if (p.m > peak || (p.m === peak && p.m > 0)) { peak = p.m; peakAt = ts; }
+    listenerMinutes += p.a;
+    totalBytes += p.b;
+  }
+
+  // Minutes réellement couvertes par chaque intervalle (le dernier est souvent incomplet)
+  const covered = buckets.map((t, i) => {
+    const end = i + 1 < buckets.length ? buckets[i + 1] : (r.bucket >= DAY ? startOfDay(t + 36 * HOUR) : t + r.bucket);
+    return Math.max(1, (Math.min(end, r.to) - Math.max(t, r.from)) / MIN);
+  });
+
+  const heatMinutes = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  for (let t = Math.floor(r.from / HOUR) * HOUR; t < r.to; t += HOUR) {
+    const lp = parts(t);
+    heatMinutes[lp.dow][lp.hour] += (Math.min(t + HOUR, r.to) - Math.max(t, r.from)) / MIN;
+  }
+
+  return {
+    series: buckets.map((t, i) => ({ t, avg: round(sumA[i] / covered[i]), max: maxM[i], bytes: bytes[i] })),
+    mountSeries: Object.fromEntries(Object.entries(perMount).map(([m, arr]) => [m, arr.map((s, i) => round(s / covered[i]))])),
+    heatmap: heatSum.map((row, d) => row.map((s, h) => (heatMinutes[d][h] ? round(s / heatMinutes[d][h]) : 0))),
+    peak,
+    peakAt,
+    avgListeners: round(listenerMinutes / ((r.to - r.from) / MIN)),
+    bytesSent: totalBytes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sessions (chaque connexion d'auditeur)
+// ---------------------------------------------------------------------------
+
+class Group {
+  constructor() { this.ips = new Set(); this.connections = 0; this.ms = 0; }
+  add(s, ms, started) {
+    this.ips.add(s.ip);
+    if (started) this.connections += 1;
+    this.ms += ms;
+  }
+  out(extra = {}) {
+    return { ...extra, unique: this.ips.size, connections: this.connections, hours: round(this.ms / HOUR) };
+  }
+}
+
+function groupBy(map, key) {
+  let g = map.get(key);
+  if (!g) map.set(key, (g = new Group()));
+  return g;
+}
+
+function sorted(map, label, limit = 30) {
+  return [...map.entries()].map(([k, g]) => g.out(label(k)))
+    .sort((a, b) => b.unique - a.unique || b.connections - a.connections).slice(0, limit);
+}
+
+function listening(r) {
+  const rows = db.prepare(`
+    SELECT ip, mount, started_at AS s, COALESCE(ended_at, last_seen) AS e, device, player, os, country, city, lat, lon
+    FROM sessions WHERE started_at < :to AND COALESCE(ended_at, last_seen) >= :from${mountFilter(r.mount)}`).all(params(r));
+
+  const total = new Group();
+  const days = new Map(daysBetween(r.from, r.to).map((d) => [d, new Group()]));
+  const hours = Array.from({ length: 24 }, () => new Group());
+  const weekdays = Array.from({ length: 7 }, () => new Group());
+  const countries = new Map();
+  const cities = new Map();
+  const devices = new Map();
+  const players = new Map();
+  const systems = new Map();
+  const mounts = new Map();
+  const durations = [];
+  let qualified = 0;
+  let qualifiedMs = 0;
+
+  for (const s of rows) {
+    const started = s.s >= r.from;
+    const dur = Math.max(0, s.e - s.s);
+    const ms = Math.max(0, Math.min(s.e, r.to) - Math.max(s.s, r.from));
+    total.add(s, ms, started);
+    groupBy(countries, s.country || '?').add(s, ms, started);
+    groupBy(devices, s.device || 'Inconnu').add(s, ms, started);
+    groupBy(players, s.player || 'Inconnu').add(s, ms, started);
+    groupBy(systems, s.os || 'Autre').add(s, ms, started);
+    groupBy(mounts, s.mount).add(s, ms, started);
+    if (s.lat !== null && s.lon !== null) {
+      const key = `${s.city || '?'}|${s.country || '?'}`;
+      let c = cities.get(key);
+      if (!c) cities.set(key, (c = { city: s.city, country: s.country, lat: s.lat, lon: s.lon, ips: new Set() }));
+      c.ips.add(s.ip);
+    }
+    if (started) {
+      // Répartitions temporelles : selon l'heure de début, dans le fuseau de la station
+      const lp = parts(s.s);
+      days.get(startOfDay(s.s))?.add(s, dur, true);
+      hours[lp.hour].add(s, dur, true);
+      weekdays[lp.dow].add(s, dur, true);
+    }
+    if (dur >= MIN_SESSION_MS) {
+      qualified += 1;
+      qualifiedMs += dur;
+      durations.push(dur);
+    }
+  }
+
+  durations.sort((a, b) => a - b);
+  const limits = [60_000, 300_000, 900_000, 1_800_000, 3_600_000, 7_200_000, Infinity];
+  const labels = ['< 1 min', '1–5 min', '5–15 min', '15–30 min', '30–60 min', '1–2 h', '> 2 h'];
+  const dist = labels.map((label) => ({ label, sessions: 0 }));
+  for (const d of durations) dist[limits.findIndex((l) => d < l)].sessions += 1;
+
+  return {
+    total,
+    qualified,
+    avgDurationSec: qualified ? Math.round(qualifiedMs / qualified / 1000) : 0,
+    medianDurationSec: durations.length ? Math.round(durations[Math.floor(durations.length / 2)] / 1000) : 0,
+    durations: dist,
+    days: [...days.entries()].map(([day, g]) => g.out({ day })),
+    hours: hours.map((g, hour) => g.out({ hour })),
+    // lundi en premier
+    weekdays: [1, 2, 3, 4, 5, 6, 0].map((dow) => weekdays[dow].out({ dow })),
+    // num : code ISO numérique, pour relier aux formes de pays de la carte
+    countries: sorted(countries, (code) => ({ code, num: isoCountries.alpha2ToNumeric(code) || null }), 250),
+    cities: [...cities.values()].map((c) => ({ city: c.city, country: c.country, lat: c.lat, lon: c.lon, unique: c.ips.size }))
+      .sort((a, b) => b.unique - a.unique).slice(0, 500),
+    devices: sorted(devices, (label) => ({ label })),
+    players: sorted(players, (label) => ({ label })),
+    os: sorted(systems, (label) => ({ label })),
+    mounts: sorted(mounts, (mount) => ({ mount })),
+  };
+}
+
+function returningListeners(r) {
+  return db.prepare(`
+    SELECT COUNT(DISTINCT s.ip) AS n FROM sessions s
+    WHERE s.started_at < :to AND COALESCE(s.ended_at, s.last_seen) >= :from${mountFilter(r.mount, 's.mount')}
+      AND EXISTS (SELECT 1 FROM sessions p WHERE p.ip = s.ip AND p.started_at < :from)`).get(params(r)).n || 0;
+}
+
+function kpisOf(a, l, returning) {
+  const countriesReached = l.countries.filter((c) => c.code !== '?' && c.code !== 'LAN').length;
+  return {
+    uniqueListeners: l.total.ips.size,
+    connections: l.total.connections,
+    sessions: l.qualified,
+    listeningMs: Math.round(l.total.ms),
+    listeningHours: round(l.total.ms / HOUR, 1),
+    countries: countriesReached,
+    peak: a.peak,
+    peakAt: a.peakAt,
+    avgListeners: a.avgListeners,
+    avgDurationSec: l.avgDurationSec,
+    medianDurationSec: l.medianDurationSec,
+    returningListeners: returning,
+    newListeners: Math.max(0, l.total.ips.size - returning),
+    bytesSent: a.bytesSent,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// « À retenir » : lectures automatiques, comme dans un rapport d'audience
+// ---------------------------------------------------------------------------
+
+const DAY_NAMES = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+const nf = (n) => n.toLocaleString('fr-FR');
+
+function insights(k, l, prev, r) {
+  const out = {};
+  const days = l.days.filter((d) => d.unique > 0);
+  if (days.length) {
+    const best = days.reduce((a, b) => (b.unique > a.unique ? b : a));
+    const avg = Math.round(l.days.reduce((s, d) => s + d.unique, 0) / l.days.length);
+    out.days = `Pic d'audience le ${fmtDate(best.day, { day: 'numeric', month: 'short' })} avec ${nf(best.unique)} auditeurs uniques · moyenne de ${nf(avg)} / jour.`;
+  }
+  const hour = l.hours.reduce((a, b) => (b.unique > a.unique ? b : a));
+  if (hour.unique) out.hours = `Créneau le plus écouté : ${hour.hour}h (${nf(hour.unique)} auditeurs uniques).`;
+  const wd = l.weekdays.reduce((a, b) => (b.unique > a.unique ? b : a));
+  if (wd.unique) out.weekdays = `Journée la plus active : le ${DAY_NAMES[wd.dow]} (${nf(wd.unique)} auditeurs uniques).`;
+  const top = l.countries.find((c) => c.code !== '?');
+  if (top) out.countries = { code: top.code, share: pct(top.unique, k.uniqueListeners), unique: top.unique };
+  const dev = l.devices.find((d) => d.label !== 'Inconnu');
+  if (dev) out.devices = `${dev.label} est le support dominant (${pct(dev.unique, k.uniqueListeners)} % des auditeurs).`;
+  if (k.medianDurationSec) {
+    out.durations = `La moitié des sessions dure plus de ${k.medianDurationSec >= 3600
+      ? `${Math.floor(k.medianDurationSec / 3600)} h ${String(Math.floor((k.medianDurationSec % 3600) / 60)).padStart(2, '0')}`
+      : k.medianDurationSec >= 60 ? `${Math.round(k.medianDurationSec / 60)} min` : `${k.medianDurationSec} s`}.`;
+  }
+  if (prev && prev.uniqueListeners) {
+    const d = pct(k.uniqueListeners - prev.uniqueListeners, prev.uniqueListeners);
+    out.trend = d > 999
+      ? `Auditeurs uniques multipliés par ${(k.uniqueListeners / prev.uniqueListeners).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} par rapport à la période précédente.`
+      : `${d >= 0 ? '+' : ''}${d} % d'auditeurs uniques par rapport à la période précédente.`;
+  }
+  if (k.uniqueListeners) {
+    out.loyalty = `${pct(k.returningListeners, k.uniqueListeners)} % de vos auditeurs étaient déjà venus avant cette période.`;
   }
   return out;
 }
 
-const SESSION_END = 'COALESCE(ended_at, last_seen)';
-const OVERLAP = `started_at < :to AND ${SESSION_END} >= :from`;
-const CLIPPED = `(MIN(${SESSION_END}, :to) - MAX(started_at, :from))`;
-
-function kpis(r) {
-  const peak = db.prepare(`
-    SELECT ts, SUM(listeners_max) AS v FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)}
-    GROUP BY ts ORDER BY v DESC, ts DESC LIMIT 1`).get(params(r));
-  const totals = db.prepare(`
-    SELECT SUM(listeners_avg) AS listener_minutes, SUM(bytes_sent) AS bytes
-    FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)}`).get(params(r));
-  const s = db.prepare(`
-    SELECT COUNT(*) AS sessions,
-           COUNT(DISTINCT ip) AS unique_listeners,
-           AVG(${SESSION_END} - started_at) AS avg_duration,
-           SUM(${CLIPPED}) AS listen_ms
-    FROM sessions WHERE ${OVERLAP}${mountFilter(r.mount)}
-      AND (${SESSION_END} - started_at) >= :minDur`).get(params(r, { minDur: MIN_SESSION_MS }));
-  const all = db.prepare(`SELECT SUM(${CLIPPED}) AS listen_ms, COUNT(*) AS n FROM sessions WHERE ${OVERLAP}${mountFilter(r.mount)}`)
-    .get(params(r));
-  const returning = db.prepare(`
-    SELECT COUNT(DISTINCT s.ip) AS n FROM sessions s
-    WHERE s.started_at < :to AND COALESCE(s.ended_at, s.last_seen) >= :from${mountFilter(r.mount, 's.mount')}
-      AND EXISTS (SELECT 1 FROM sessions p WHERE p.ip = s.ip AND p.started_at < :from)`).get(params(r));
-  const minutes = (r.to - r.from) / MIN;
-  return {
-    peak: peak?.v || 0,
-    peakAt: peak?.ts || null,
-    avgListeners: Math.round(((totals.listener_minutes || 0) / minutes) * 100) / 100,
-    sessions: s.sessions || 0,
-    shortSessions: (all.n || 0) - (s.sessions || 0),
-    uniqueListeners: s.unique_listeners || 0,
-    returningListeners: returning.n || 0,
-    avgDurationSec: Math.round((s.avg_duration || 0) / 1000),
-    listeningHours: Math.round(((all.listen_ms || 0) / HOUR) * 10) / 10,
-    bytesSent: totals.bytes || 0,
-  };
-}
-
-function breakdown(r, column) {
-  return db.prepare(`
-    SELECT COALESCE(${column}, '?') AS label, COUNT(*) AS sessions, COUNT(DISTINCT ip) AS listeners,
-           ROUND(SUM(${CLIPPED}) / 3600000.0, 2) AS hours
-    FROM sessions WHERE ${OVERLAP}${mountFilter(r.mount)} AND (${SESSION_END} - started_at) >= :minDur
-    GROUP BY label ORDER BY hours DESC, sessions DESC LIMIT 20`).all(params(r, { minDur: MIN_SESSION_MS }));
-}
-
-function durations(r) {
-  const row = db.prepare(`
-    SELECT
-      SUM(d < 60000) AS b0, SUM(d >= 60000 AND d < 300000) AS b1, SUM(d >= 300000 AND d < 900000) AS b2,
-      SUM(d >= 900000 AND d < 1800000) AS b3, SUM(d >= 1800000 AND d < 3600000) AS b4,
-      SUM(d >= 3600000 AND d < 7200000) AS b5, SUM(d >= 7200000) AS b6
-    FROM (SELECT ${SESSION_END} - started_at AS d FROM sessions
-          WHERE ${OVERLAP}${mountFilter(r.mount)} AND (${SESSION_END} - started_at) >= :minDur)`)
-    .get(params(r, { minDur: MIN_SESSION_MS }));
-  const labels = ['< 1 min', '1–5 min', '5–15 min', '15–30 min', '30–60 min', '1–2 h', '> 2 h'];
-  return labels.map((label, i) => ({ label, sessions: row[`b${i}`] || 0 }));
-}
-
-/** Audience moyenne par jour de la semaine et par heure (heure locale du serveur). */
-function heatmap(r) {
-  const rows = db.prepare(`
-    SELECT CAST(strftime('%w', ts / 1000, 'unixepoch', 'localtime') AS INTEGER) AS dow,
-           CAST(strftime('%H', ts / 1000, 'unixepoch', 'localtime') AS INTEGER) AS h,
-           SUM(tot) AS s
-    FROM (SELECT ts, SUM(listeners_avg) AS tot FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)} GROUP BY ts)
-    GROUP BY dow, h`).all(params(r));
-  // Nombre de minutes de chaque créneau couvertes par la période
-  const minutes = Array.from({ length: 7 }, () => new Array(24).fill(0));
-  for (let t = Math.floor(r.from / HOUR) * HOUR; t < r.to; t += HOUR) {
-    const d = new Date(t);
-    const covered = (Math.min(t + HOUR, r.to) - Math.max(t, r.from)) / MIN;
-    if (covered > 0) minutes[d.getDay()][d.getHours()] += covered;
-  }
-  const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
-  for (const x of rows) {
-    const m = minutes[x.dow][x.h];
-    grid[x.dow][x.h] = m ? Math.round((x.s / m) * 100) / 100 : 0;
-  }
-  return grid;
-}
-
-function daily(r) {
-  const off = tzOffset(r.to);
-  const samples = db.prepare(`
-    SELECT CAST((ts + :off) / 86400000 AS INTEGER) * 86400000 - :off AS day, MAX(tot_max) AS peak, SUM(tot_avg) AS lm, SUM(bytes) AS bytes
-    FROM (SELECT ts, SUM(listeners_avg) AS tot_avg, SUM(listeners_max) AS tot_max, SUM(bytes_sent) AS bytes
-          FROM samples WHERE ts >= :from AND ts < :to${mountFilter(r.mount)} GROUP BY ts)
-    GROUP BY day`).all(params(r, { off }));
-  const sessions = db.prepare(`
-    SELECT CAST((started_at + :off) / 86400000 AS INTEGER) * 86400000 - :off AS day, COUNT(*) AS sessions,
-           COUNT(DISTINCT ip) AS listeners, AVG(${SESSION_END} - started_at) AS avg_d,
-           SUM(${SESSION_END} - started_at) AS ms
-    FROM sessions WHERE started_at >= :from AND started_at < :to${mountFilter(r.mount)}
-      AND (${SESSION_END} - started_at) >= :minDur
-    GROUP BY day`).all(params(r, { off, minDur: MIN_SESSION_MS }));
-  const days = new Map();
-  for (const x of samples) {
-    const minutes = Math.max(1, (Math.min(x.day + DAY, r.to) - Math.max(x.day, r.from)) / MIN);
-    days.set(x.day, { day: x.day, peak: x.peak, avgListeners: Math.round((x.lm / minutes) * 100) / 100, bytes: x.bytes });
-  }
-  for (const x of sessions) {
-    const d = days.get(x.day) || { day: x.day, peak: 0, avgListeners: 0, bytes: 0 };
-    Object.assign(d, { sessions: x.sessions, listeners: x.listeners, avgDurationSec: Math.round(x.avg_d / 1000), hours: Math.round((x.ms / HOUR) * 10) / 10 });
-    days.set(x.day, d);
-  }
-  return [...days.values()].sort((a, b) => b.day - a.day);
-}
-
-function perMount(r) {
-  const s = db.prepare(`
-    SELECT mount, MAX(listeners_max) AS peak, SUM(listeners_avg) AS lm, SUM(bytes_sent) AS bytes
-    FROM samples WHERE ts >= :from AND ts < :to GROUP BY mount`).all({ from: r.from, to: r.to });
-  const ses = db.prepare(`
-    SELECT mount, COUNT(*) AS sessions, COUNT(DISTINCT ip) AS listeners, SUM(${CLIPPED}) AS ms
-    FROM sessions WHERE ${OVERLAP} AND (${SESSION_END} - started_at) >= :minDur GROUP BY mount`)
-    .all({ from: r.from, to: r.to, minDur: MIN_SESSION_MS });
-  const minutes = (r.to - r.from) / MIN;
-  const map = new Map(s.map((x) => [x.mount, {
-    mount: x.mount, peak: x.peak, avgListeners: Math.round((x.lm / minutes) * 100) / 100, bytes: x.bytes, sessions: 0, listeners: 0, hours: 0,
-  }]));
-  for (const x of ses) {
-    const m = map.get(x.mount) || { mount: x.mount, peak: 0, avgListeners: 0, bytes: 0 };
-    Object.assign(m, { sessions: x.sessions, listeners: x.listeners, hours: Math.round((x.ms / HOUR) * 10) / 10 });
-    map.set(x.mount, m);
-  }
-  return [...map.values()].sort((a, b) => b.hours - a.hours);
-}
-
 export function overview(query) {
   const r = parseRange(query);
+  const a = audience(r);
+  const l = listening(r);
+  const k = kpisOf(a, l, returningListeners(r));
+
+  // Période précédente de même durée, pour les tendances
+  const pr = { ...r, from: r.from - (r.to - r.from), to: r.from };
+  const pa = audience({ ...pr, bucket: DAY });
+  const pl = listening(pr);
+  const prev = kpisOf(pa, pl, returningListeners(pr));
+
   return {
     range: r,
-    kpis: kpis(r),
-    series: series(r),
-    players: breakdown(r, 'player'),
-    os: breakdown(r, 'os'),
-    countries: breakdown(r, 'country'),
-    durations: durations(r),
-    heatmap: heatmap(r),
-    daily: daily(r),
-    mounts: perMount(r),
+    kpis: k,
+    previous: prev,
+    insights: insights(k, l, prev, r),
+    series: a.series,
+    mountSeries: a.mountSeries,
+    heatmap: a.heatmap,
+    days: l.days,
+    hours: l.hours,
+    weekdays: l.weekdays,
+    countries: l.countries,
+    cities: l.cities,
+    devices: l.devices,
+    players: l.players,
+    os: l.os,
+    durations: l.durations,
+    mounts: l.mounts,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Titres, sessions, événements
+// ---------------------------------------------------------------------------
 
 export function tracks(query) {
   const r = parseRange(query);
@@ -237,13 +356,15 @@ export function tracks(query) {
 
 export function sessions(query) {
   const r = parseRange(query);
-  const limit = Math.min(Number(query.limit) || 100, 1000);
+  const limit = Math.min(Number(query.limit) || 100, 1_000_000);
   const offset = Number(query.offset) || 0;
   const minDur = query.all === '1' ? 0 : MIN_SESSION_MS;
-  const where = `${OVERLAP}${mountFilter(r.mount)} AND (${SESSION_END} - started_at) >= :minDur`;
+  const where = `started_at < :to AND COALESCE(ended_at, last_seen) >= :from${mountFilter(r.mount)}
+    AND (COALESCE(ended_at, last_seen) - started_at) >= :minDur`;
   const rows = db.prepare(`
-    SELECT id, mount, ip, user_agent, player, os, country, referer, started_at, ${SESSION_END} AS ended_at,
-           ended_at IS NULL AS active, (${SESSION_END} - started_at) AS duration
+    SELECT id, mount, ip, user_agent, player, os, device, country, city, referer, started_at,
+           COALESCE(ended_at, last_seen) AS ended_at, ended_at IS NULL AS active,
+           (COALESCE(ended_at, last_seen) - started_at) AS duration
     FROM sessions WHERE ${where} ORDER BY started_at DESC LIMIT :limit OFFSET :offset`)
     .all(params(r, { minDur, limit, offset }));
   const total = db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${where}`).get(params(r, { minDur })).n;
@@ -251,13 +372,13 @@ export function sessions(query) {
 }
 
 export function sessionsCsv(query) {
-  const { rows } = sessions({ ...query, limit: 1000000, offset: 0 });
+  const { rows } = sessions({ ...query, limit: 1_000_000, offset: 0 });
   const csvEsc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const iso = (t) => new Date(t).toISOString();
-  const lines = ['debut;fin;duree_s;point_de_montage;ip;pays;lecteur;systeme;user_agent'];
+  const lines = ['debut;fin;duree_s;point_de_montage;ip;pays;ville;appareil;lecteur;systeme;user_agent'];
   for (const x of rows) {
-    lines.push([iso(x.started_at), iso(x.ended_at), Math.round(x.duration / 1000), x.mount, x.ip, x.country, x.player, x.os, x.user_agent]
-      .map(csvEsc).join(';'));
+    lines.push([iso(x.started_at), iso(x.ended_at), Math.round(x.duration / 1000), x.mount, x.ip, x.country, x.city,
+      x.device, x.player, x.os, x.user_agent].map(csvEsc).join(';'));
   }
   return '﻿' + lines.join('\r\n');
 }

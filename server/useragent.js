@@ -47,8 +47,20 @@ const SYSTEMS = [
   [/Linux|X11/i, 'Linux'],
 ];
 
+// Type d'appareil, dans l'esprit des rapports d'audience radio
+const DEVICES = [
+  [/curl|Wget|python|Go-http-client|okhttp|Java\/|libwww|HttpClient|bot\b|spider|crawler|Streamripper|Lavf|FFmpeg|Icecast|Liquidsoap/i, 'Script'],
+  [/AlexaMediaPlayer|Echo\b|Sonos|Google-?Home|Google Nest|Bose|HomePod|audioOS|Yamaha|Denon|Marantz|Bluesound|Frontier Silicon|Libratone|SqueezePlay|Squeezebox/i, 'Enceinte connectée'],
+  [/Android Auto|CarPlay|Tesla|QtCarBrowser|Mercedes|BMW|Volvo/i, 'Voiture'],
+  [/SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|HbbTV|Roku|AppleTV|tvOS|AFT[A-Z]|CrKey|Android TV|GoogleTV|Kodi|XBMC|PlayStation|Xbox|Freebox|Bbox|Livebox|SHIELD/i, 'TV / box'],
+  [/iPad|Tablet|Kindle|Silk\/|PlayBook|SM-T\d|Nexus (7|9|10)\b/i, 'Tablette'],
+  [/iPhone|iPod|Mobile|Windows Phone|BlackBerry|Opera Mini|RadioDroid|ExoPlayer|AndroidX?Media|stagefright|Dalvik|CFNetwork|Android/i, 'Smartphone'],
+  [/Windows|Macintosh|Mac OS X|X11|Linux|CrOS|VLC|Winamp|foobar2000|AIMP|MusicBee|iTunes|NSPlayer|WMFSDK|Clementine|Strawberry|Rhythmbox|Audacious|mpv|MPlayer/i, 'PC'],
+];
+
 export function parseUserAgent(ua = '') {
   const player = PLAYERS.find(([re]) => re.test(ua))?.[1] || (ua ? 'Autre' : 'Inconnu');
   const os = SYSTEMS.find(([re]) => re.test(ua))?.[1] || 'Autre';
-  return { player, os };
+  const device = DEVICES.find(([re]) => re.test(ua))?.[1] || 'Inconnu';
+  return { player, os, device };
 }

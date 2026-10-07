@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { db, tx, logEvent } from './db.js';
 import { parseUserAgent } from './useragent.js';
-import { lookupCountry } from './geo.js';
+import { lookup } from './geo.js';
 
 const MINUTE = 60_000;
 const HISTORY_MS = 60 * MINUTE;
@@ -10,9 +10,9 @@ const q = {
   insertSample: db.prepare(`INSERT INTO samples (mount, ts, listeners_avg, listeners_max, bytes_sent) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (mount, ts) DO UPDATE SET listeners_avg = excluded.listeners_avg,
       listeners_max = MAX(listeners_max, excluded.listeners_max), bytes_sent = bytes_sent + excluded.bytes_sent`),
-  openSessions: db.prepare('SELECT id, mount, client_key, ip, user_agent, player, os, country, started_at, last_seen FROM sessions WHERE ended_at IS NULL'),
-  insertSession: db.prepare(`INSERT INTO sessions (mount, client_key, ip, user_agent, player, os, country, referer, started_at, last_seen)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+  openSessions: db.prepare('SELECT id, mount, client_key, ip, user_agent, player, os, device, country, city, started_at, last_seen FROM sessions WHERE ended_at IS NULL'),
+  insertSession: db.prepare(`INSERT INTO sessions (mount, client_key, ip, user_agent, player, os, device, country, city, lat, lon, referer, started_at, last_seen)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   touchSession: db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?'),
   closeSession: db.prepare('UPDATE sessions SET ended_at = last_seen WHERE id = ?'),
   openTracks: db.prepare('SELECT id, mount, title, listeners_peak FROM tracks WHERE ended_at IS NULL'),
@@ -244,11 +244,12 @@ export class Collector extends EventEmitter {
       seen.add(key);
       let s = this.sessions.get(key);
       if (!s) {
-        const { player, os } = parseUserAgent(l.userAgent);
-        const country = lookupCountry(l.ip);
+        const { player, os, device } = parseUserAgent(l.userAgent);
+        const { country, city, lat, lon } = lookup(l.ip);
         const startedAt = now - l.connected * 1000;
-        const { lastInsertRowid } = q.insertSession.run(mount, key, l.ip, l.userAgent, player, os, country, l.referer || null, startedAt, now);
-        s = { id: Number(lastInsertRowid), mount, client_key: key, ip: l.ip, user_agent: l.userAgent, player, os, country, started_at: startedAt };
+        const { lastInsertRowid } = q.insertSession.run(mount, key, l.ip, l.userAgent, player, os, device, country, city, lat, lon,
+          l.referer || null, startedAt, now);
+        s = { id: Number(lastInsertRowid), mount, client_key: key, ip: l.ip, user_agent: l.userAgent, player, os, device, country, city, started_at: startedAt };
         this.sessions.set(key, s);
       } else {
         q.touchSession.run(now, s.id);
@@ -271,7 +272,9 @@ export class Collector extends EventEmitter {
       userAgent: s.user_agent,
       player: s.player,
       os: s.os,
+      device: s.device,
       country: s.country,
+      city: s.city,
       startedAt: s.started_at,
       duration: Math.round((now - s.started_at) / 1000),
     };

@@ -8,20 +8,22 @@ import statsPage from './pages/stats.js';
 import tracks from './pages/tracks.js';
 import journal from './pages/journal.js';
 import server from './pages/server.js';
+import report from './pages/report.js';
 
 const PAGES = [
   { path: '', label: 'Tableau de bord', icon: 'dashboard', page: dashboard },
   { path: 'flux', label: 'Flux', icon: 'radio', page: mounts },
   { path: 'auditeurs', label: 'Auditeurs', icon: 'users', page: listeners, count: true },
   { path: 'stats', label: 'Statistiques', icon: 'chart', page: statsPage },
-  { path: 'titres', label: 'Titres diffusés', icon: 'music', page: tracks },
+  { path: 'rapport', label: 'Rapport d\'audience', icon: 'file', page: report },
+  { path: 'titres', label: 'Titres diffusés', icon: 'music', page: tracks, sep: true },
   { path: 'journal', label: 'Journal', icon: 'list', page: journal },
   { path: 'serveur', label: 'Serveur', icon: 'server', page: server },
 ];
 
 // ---------- État temps réel ----------
 
-export const store = { live: null, history: [], process: null };
+export const store = { live: null, history: [], process: null, branding: { name: 'RadioSMP', slogan: '' } };
 const subscribers = new Set();
 export function onLive(fn) {
   subscribers.add(fn);
@@ -62,12 +64,12 @@ function layout() {
   document.body.innerHTML = String(html`
     <div class="app">
       <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-logo">${icon('radio')}</div>
-          <div><div class="brand-name">Flux</div><div class="brand-sub">Gestion Icecast</div></div>
-        </div>
+        <a class="brand" href="#/">
+          <img src="/img/logo.png" alt="${store.branding.name}">
+          <span class="brand-sub">Studio · Icecast</span>
+        </a>
         <nav class="nav">
-          ${PAGES.map((p) => html`<a href="#/${p.path}" data-path="${p.path}">${icon(p.icon)}<span>${p.label}</span>${p.count ? raw('<span class="count" data-count>0</span>') : ''}</a>`)}
+          ${PAGES.map((p) => html`${p.sep ? raw('<div class="nav-sep"></div>') : ''}<a href="#/${p.path}" data-path="${p.path}">${icon(p.icon)}<span>${p.label}</span>${p.count ? raw('<span class="count" data-count>0</span>') : ''}</a>`)}
         </nav>
         <div class="sidebar-foot">
           <div class="server-pill" id="server-pill"></div>
@@ -169,7 +171,7 @@ function route() {
   const entry = PAGES.find((p) => p.path === path) || PAGES[0];
   $$('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.path === entry.path));
   $('#page-title').textContent = entry.label;
-  document.title = `${entry.label} · Flux`;
+  document.title = `${entry.label} · ${store.branding.name}`;
 
   if (typeof cleanup === 'function') cleanup();
   destroyCharts($('#view'));
@@ -187,10 +189,8 @@ function authScreen(needsSetup) {
   document.body.innerHTML = String(html`
     <div class="auth">
       <div class="card">
-        <div class="brand">
-          <div class="brand-logo">${icon('radio')}</div>
-          <div><div class="brand-name">Flux</div><div class="brand-sub">Gestion Icecast</div></div>
-        </div>
+        <img class="logo" src="/img/logo.png" alt="${store.branding.name}">
+        <div class="tagline">Studio · Gestion de la diffusion</div>
         ${needsSetup
           ? html`<h2>Bienvenue !</h2><p class="muted">Choisissez le mot de passe qui protégera votre dashboard.</p>`
           : html`<h2>Connexion</h2><p class="muted">Entrez le mot de passe du dashboard.</p>`}
@@ -239,6 +239,7 @@ async function boot() {
     if (t) document.documentElement.dataset.theme = t;
   } catch {}
   const state = await api('/auth/state');
+  if (state.branding?.name) store.branding = state.branding;
   if (state.authed) start();
   else authScreen(state.needsSetup);
 }

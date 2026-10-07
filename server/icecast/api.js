@@ -19,6 +19,7 @@ const num = (v) => {
 export class IcecastApi {
   constructor(getConfig) {
     this.getConfig = getConfig;
+    this.serverId = '';
   }
 
   get base() {
@@ -52,7 +53,9 @@ export class IcecastApi {
   }
 
   async action(pathname, params) {
-    const data = await this.request(pathname, params, { method: 'POST' });
+    // Icecast 2.5 attend POST pour les actions (GET fonctionne mais est signalé) ; la 2.4 n'accepte que GET
+    const method = /Icecast 2\.[0-4]\./.test(this.serverId) ? 'GET' : 'POST';
+    const data = await this.request(pathname, params, { method });
     const r = data.iceresponse;
     if (r && String(r.return) !== '1') throw new IcecastError(r.message || 'Action refusée par Icecast');
     return r?.message || 'OK';
@@ -60,6 +63,7 @@ export class IcecastApi {
 
   async stats() {
     const { icestats: s } = await this.request('/admin/stats');
+    this.serverId = s.server_id || '';
     return {
       instance: s.instance_uuid || s.server_start,
       serverId: s.server_id,
@@ -107,7 +111,7 @@ export class IcecastApi {
     const { icestats } = await this.request('/admin/listclients', { mount });
     const src = icestats?.source?.[0];
     return (src?.listener || []).map((l) => ({
-      id: String(l.id ?? l['@_id']),
+      id: String(l.id ?? l.ID ?? l['@_id']),
       ip: l.ip || l.IP || '',
       userAgent: l.useragent || l.UserAgent || '',
       connected: num(l.connected ?? l.Connected) ?? 0,
@@ -118,7 +122,8 @@ export class IcecastApi {
   }
 
   updateMetadata(mount, song) {
-    return this.action('/admin/metadata', { mount, mode: 'updinfo', song });
+    // charset explicite : Icecast 2.4 suppose sinon du Latin-1 pour les flux MP3
+    return this.action('/admin/metadata', { mount, mode: 'updinfo', song, charset: 'UTF-8' });
   }
 
   killClient(mount, id) {

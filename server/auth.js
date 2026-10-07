@@ -62,7 +62,8 @@ function tooManyAttempts(ip) {
 
 export function authRoutes(app) {
   app.get('/api/auth/state', (req, res) => {
-    res.json({ needsSetup: !getSettings().dashboard.passwordHash, authed: isAuthed(req) });
+    const { name, slogan } = getSettings().branding || {};
+    res.json({ needsSetup: !getSettings().dashboard.passwordHash, authed: isAuthed(req), branding: { name, slogan } });
   });
 
   app.post('/api/auth/setup', (req, res) => {

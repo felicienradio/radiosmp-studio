@@ -19,13 +19,14 @@ function mountForm(m, others) {
       <label class="field">Auditeurs max.<input type="number" min="0" name="maxListeners" value="${m.maxListeners}">
         <span class="hint">0 = illimité (dans la limite globale du serveur)</span></label>
     </div>
-    <fieldset>
-      <legend>Source (encodeur)</legend>
+    <fieldset class="accent">
+      <legend>${icon('lock')} Accès diffusion</legend>
       <div class="form-grid">
-        <label class="field">Mot de passe dédié<div class="input-group"><input name="password" value="${m.password}" placeholder="vide = mot de passe source global" autocomplete="off">
-          <button type="button" class="btn icon" data-gen title="Générer">${icon('refresh')}</button></div>
-          <span class="hint">Permet de donner un accès limité à ce seul flux</span></label>
-        <label class="field">Utilisateur<input name="username" value="${m.username}" placeholder="source"></label>
+        <label class="field">Utilisateur<input name="username" value="${m.username || 'source'}" placeholder="source" autocomplete="off"></label>
+        <label class="field">Mot de passe<div class="input-group"><input name="password" value="${m.password}" placeholder="généré automatiquement" autocomplete="off" minlength="4">
+          <button type="button" class="btn icon" data-gen title="Générer">${icon('refresh')}</button></div></label>
+        <p class="full dim small" style="margin:0">Identifiants à donner à l'animateur de ce flux : ils ne permettent de diffuser que sur ce point de montage.
+          Laissez vide pour en générer un automatiquement.</p>
       </div>
     </fieldset>
     <fieldset>
@@ -96,6 +97,7 @@ export async function openConnection(name) {
   const { mounts, connection: c } = await api('/mounts');
   const m = mounts.find((x) => x.name === name) || { name };
   const user = m.password ? m.username || 'source' : 'source';
+  const dedicated = !!m.password;
   const pass = m.password || c.sourcePassword;
   const base = c.managed ? `http://${c.host}:${c.port}` : c.apiUrl.replace(/\/+$/, '');
   const host = base.replace(/^https?:\/\//, '').split(':')[0];
@@ -118,7 +120,7 @@ export async function openConnection(name) {
             <dt>Utilisateur</dt><dd>${copyable(user)}</dd>
             <dt>Mot de passe</dt><dd>${secret(pass)}</dd>
           </dl>
-          <p class="dim small">${m.password ? 'Ce flux a son propre mot de passe.' : 'Mot de passe source global (réglable sur la page Serveur).'}
+          <p class="dim small">${dedicated ? 'Ces identifiants sont propres à ce flux.' : 'Mot de passe source global (réglable sur la page Serveur).'}
           Si l'encodeur est sur un autre ordinateur, remplacez l'adresse par l'IP de ce PC.</p>
         </div>
         <div>
@@ -151,6 +153,11 @@ export function bindMountActions(root, reload) {
       const song = await promptDialog(`Titre en cours sur ${name}`, 'Artiste - Titre', current === 'Titre non renseigné' ? '' : current, { confirm: 'Mettre à jour' });
       if (song) await run(null, () => api('/mounts/metadata', { method: 'POST', body: { mount: name, song } }), 'Titre mis à jour');
     }
+    if (act === 'regen') {
+      if (!await confirmDialog('Nouveau mot de passe de diffusion ?', `L'encodeur qui diffuse sur ${name} devra utiliser le nouveau mot de passe. Il sera appliqué au prochain redémarrage d'Icecast.`, { confirm: 'Générer' })) return;
+      const r = await run(null, () => api(`/mounts/${id}/password`, { method: 'POST' }), 'Nouveau mot de passe généré');
+      if (r) reload();
+    }
     if (act === 'kill') {
       if (!await confirmDialog('Couper la source ?', `L'encodeur connecté sur ${name} sera déconnecté. Il risque de se reconnecter automatiquement s'il est configuré pour.`, { confirm: 'Couper', danger: true })) return;
       await run(null, () => api('/mounts/kill-source', { method: 'POST', body: { mount: name } }), 'Source coupée');
@@ -176,7 +183,7 @@ export default function mountsPage(view, { store, onLive, topbar }) {
     view.innerHTML = String(html`
       <p class="muted" style="margin-top:-8px">${fmtNum(list.length)} point(s) de montage · ${fmtNum(onAir)} en direct.
         Une source qui se connecte avec le mot de passe global sur un nouveau chemin crée aussi un flux à la volée.</p>
-      <div class="grid mounts">${list.map((m) => mountCard(m))}</div>
+      <div class="grid mounts">${list.map((m) => mountCard(m, { access: true }))}</div>
       ${list.some((m) => !m.configured) ? html`<p class="dim small mt">Les flux « non configurés » utilisent les réglages par défaut.
         Cliquez sur <b>Configurer</b> pour leur donner un nom, une limite d'auditeurs, un flux de secours…</p>` : ''}`);
   }

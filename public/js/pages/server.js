@@ -30,7 +30,7 @@ export default function serverPage(view, { store, onLive }) {
         </div>
         ${p.lastError && p.state !== 'running' ? html`<div class="banner error"><div class="grow">${p.lastError}</div></div>` : ''}
         <dl class="kv">
-          <dt>Version</dt><dd>${s?.id || '—'}</dd>
+          <dt>Version</dt><dd>${s?.id || (p.version ? `Icecast ${p.version}` : '—')}</dd>
           <dt>En ligne depuis</dt><dd>${s?.start ? html`${uptime(s.start)} <span class="dim small">(${fmtDateTime(s.start)})</span>` : '—'}</dd>
           <dt>Connexions</dt><dd>${s ? html`${fmtNum(s.clients)} clients actuels · ${fmtNum(s.connections)} depuis le démarrage` : '—'}</dd>
           ${p.managed ? html`
@@ -109,6 +109,17 @@ export default function serverPage(view, { store, onLive }) {
           </fieldset>
 
           <fieldset>
+            <legend>Radio</legend>
+            <div class="form-grid">
+              <label class="field">Nom de la radio<input name="branding.name" value="${data.branding.name}" required></label>
+              <label class="field">Slogan<input name="branding.slogan" value="${data.branding.slogan}"></label>
+              <label class="field">Fuseau horaire des statistiques<input name="timezone" value="${data.timezone}" list="tz-list" required>
+                <span class="hint">Les répartitions par heure et par jour sont calculées dans ce fuseau, même si le serveur est en UTC</span></label>
+              <datalist id="tz-list">${['Europe/Paris', 'Europe/Brussels', 'Europe/Zurich', 'Europe/Luxembourg', 'America/Guadeloupe', 'America/Martinique', 'Indian/Reunion', 'America/Montreal', 'Africa/Casablanca', 'UTC'].map((z) => html`<option value="${z}">`)}</datalist>
+            </div>
+          </fieldset>
+
+          <fieldset>
             <legend>Statistiques</legend>
             <div class="form-grid">
               <label class="field">Fréquence de relevé (secondes)<input type="number" name="collector.intervalSec" value="${c.intervalSec}" min="2" max="300"></label>
@@ -122,15 +133,17 @@ export default function serverPage(view, { store, onLive }) {
       <div class="grid cols-2 mt">
         <div class="card">
           <div class="card-head"><h2>Géolocalisation des auditeurs</h2></div>
-          <p class="muted" style="margin-top:0">Pour afficher le pays de chaque auditeur, le dashboard utilise la base gratuite
-            <a href="https://db-ip.com" target="_blank" rel="noopener">DB-IP Lite</a> (licence CC BY 4.0, environ 4 Mo à télécharger), stockée sur ce PC.
-            Aucune adresse IP n'est envoyée à un service extérieur.</p>
+          <p class="muted" style="margin-top:0">Pour connaître le pays et la ville de chaque auditeur (carte du monde, top pays), le dashboard utilise
+            les bases gratuites <a href="https://db-ip.com" target="_blank" rel="noopener">DB-IP Lite</a> (licence CC BY 4.0), stockées sur le serveur.
+            Aucune adresse IP n'est envoyée à un service extérieur. Les auditeurs déjà enregistrés sont localisés après l'installation.</p>
           <div class="row">
             ${data.geo.installed
-              ? html`<span class="badge ok">Installée</span><span class="dim small">mise à jour le ${fmtDateTime(data.geo.updatedAt)}</span>`
+              ? html`<span class="badge ok">${data.geo.hasCities ? 'Villes + pays' : 'Pays seulement'}</span><span class="dim small">mise à jour le ${fmtDateTime(data.geo.updatedAt)}</span>`
               : html`<span class="badge warn">Non installée</span>`}
-            <div class="spacer" style="flex:1"></div>
-            <button class="btn" id="geo-btn">${icon('download')} ${data.geo.installed ? 'Mettre à jour' : 'Télécharger la base'}</button>
+          </div>
+          <div class="row mt">
+            <button class="btn primary" data-geo="city">${icon('download')} Base villes + pays (${data.geo.sizes.city})</button>
+            <button class="btn" data-geo="country">${icon('download')} Pays seulement (${data.geo.sizes.country})</button>
           </div>
         </div>
         <form class="card" id="pwd-form">
@@ -146,8 +159,11 @@ export default function serverPage(view, { store, onLive }) {
       <div class="card mt">
         <div class="card-head"><h2>Accès au dashboard</h2></div>
         <p class="muted" style="margin-top:0">Le dashboard écoute sur ${copyable(`http://${data.dashboard.host}:${data.dashboard.port}`)}.
-          Par sécurité il n'est accessible que depuis ce PC. Pour l'ouvrir depuis un autre appareil, changez <code>dashboard.host</code>
-          en <code>0.0.0.0</code> dans <code>data/settings.json</code> puis redémarrez le dashboard.</p>
+          ${data.dashboard.host === '0.0.0.0'
+            ? 'Il est accessible depuis les autres appareils du réseau. Pour un accès depuis Internet, placez-le derrière un reverse proxy en HTTPS.'
+            : html`Il n'est accessible que depuis cette machine. Pour l'ouvrir depuis un autre appareil, définissez la variable
+              d'environnement <code>FLUX_HOST=0.0.0.0</code> (déjà fait par le script d'installation LXC) puis redémarrez le dashboard.`}
+          ${data.platform === 'linux' ? html`<br>Service : <code>systemctl restart flux</code> · journaux : <code>journalctl -u flux -f</code>` : ''}</p>
       </div>`);
     toggleMode();
   }
@@ -185,10 +201,12 @@ export default function serverPage(view, { store, onLive }) {
       const r = await api('/server/config');
       modal({ title: 'icecast.xml (généré)', wide: true, body: html`<p class="dim small" style="margin-top:0"><code>${r.file}</code></p><div class="log">${r.xml}</div>` });
     }
-    const geo = e.target.closest('#geo-btn');
+    const geo = e.target.closest('[data-geo]');
     if (geo) {
-      geo.textContent = 'Téléchargement…';
-      await run(geo, () => api('/geo/download', { method: 'POST' }), 'Base GeoIP installée : les pays des nouveaux auditeurs seront affichés').catch(() => {});
+      const kind = geo.dataset.geo;
+      geo.textContent = 'Téléchargement en cours…';
+      view.querySelectorAll('[data-geo]').forEach((b) => { b.disabled = true; });
+      await run(null, () => api('/geo/download', { method: 'POST', body: { kind } }), 'Base GeoIP installée, auditeurs localisés').catch(() => {});
       load();
     }
   });

@@ -18,6 +18,11 @@
     "chart.js": "^4.5.1",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.11.2",
-    "maxmind": "^5.0.7"
+    "flag-icons": "^7.5.0",
+    "i18n-iso-countries": "^7.14.0",
+    "leaflet": "^1.9.4",
+    "maxmind": "^5.0.7",
+    "topojson-client": "^3.1.0",
+    "world-atlas": "^2.0.2"
   }
 }

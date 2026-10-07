@@ -1,4 +1,4 @@
-import { api, html, $, fmtNum, fmtDec, fmtDuration, fmtKbps, fmtTime, fmtBytes } from '../lib.js';
+import { api, html, $, fmtNum, fmtDuration, fmtKbps, fmtTime, fmtBytes, fmtHours, trend, country, barList } from '../lib.js';
 import { lineChart } from '../charts.js';
 import { mountCard, eventItem } from './components.js';
 import { bindMountActions } from './mounts.js';
@@ -17,10 +17,14 @@ export default function dashboard(view, { store, onLive }) {
     </div>
     <div class="row between mt-l"><h2>Vos flux</h2><a class="btn sm" href="#/flux">Gérer les flux</a></div>
     <div class="grid mounts mt" id="mounts"></div>
-    <div class="grid cols-2 mt-l">
+    <div class="grid cols-3 mt-l">
       <div class="card">
-        <div class="card-head"><h2>Dernières 24 heures</h2><div class="spacer"></div><a class="small" href="#/stats">Statistiques détaillées →</a></div>
+        <div class="card-head"><h2>Dernières 24 heures</h2><div class="spacer"></div><a class="small" href="#/stats">Statistiques →</a></div>
         <div class="chart-box sm"><canvas id="day-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Top pays 24 h</h2><div class="spacer"></div><a class="small" href="#/rapport">Rapport →</a></div>
+        <div id="countries"></div>
       </div>
       <div class="card">
         <div class="card-head"><h2>Activité récente</h2><div class="spacer"></div><a class="small" href="#/journal">Journal →</a></div>
@@ -42,17 +46,19 @@ export default function dashboard(view, { store, onLive }) {
   function renderKpis() {
     const t = store.live?.totals || {};
     const k = day?.kpis || {};
+    const p = day?.previous;
+    const vs = { suffix: 'vs veille' };
     $('#kpis', view).innerHTML = String(html`
-      <div class="card kpi accent"><div class="kpi-label">Auditeurs en direct</div><div class="kpi-value">${fmtNum(t.listeners || 0)}</div>
+      <div class="card kpi hero"><div class="kpi-label">Auditeurs en direct</div><div class="kpi-value">${fmtNum(t.listeners || 0)}</div>
         <div class="kpi-sub">record : ${fmtNum(t.record || 0)}</div></div>
-      <div class="card kpi"><div class="kpi-label">Pic sur 24 h</div><div class="kpi-value">${fmtNum(k.peak)}</div>
-        <div class="kpi-sub">${k.peakAt ? `à ${fmtTime(k.peakAt).slice(0, 5)}` : '—'}</div></div>
       <div class="card kpi"><div class="kpi-label">Auditeurs uniques 24 h</div><div class="kpi-value">${fmtNum(k.uniqueListeners)}</div>
-        <div class="kpi-sub">${fmtNum(k.sessions)} sessions</div></div>
-      <div class="card kpi"><div class="kpi-label">Heures d'écoute 24 h</div><div class="kpi-value">${fmtDec(k.listeningHours)}</div>
-        <div class="kpi-sub">moyenne ${fmtDec(k.avgListeners)} simultanés</div></div>
-      <div class="card kpi"><div class="kpi-label">Durée moyenne d'écoute</div><div class="kpi-value">${k.avgDurationSec != null ? fmtDuration(k.avgDurationSec, true) : '—'}</div>
-        <div class="kpi-sub">par session (24 h)</div></div>
+        <div class="kpi-sub">${trend(k.uniqueListeners, p?.uniqueListeners, vs)}</div></div>
+      <div class="card kpi"><div class="kpi-label">Connexions 24 h</div><div class="kpi-value">${fmtNum(k.connections)}</div>
+        <div class="kpi-sub">${trend(k.connections, p?.connections, vs)}</div></div>
+      <div class="card kpi"><div class="kpi-label">Temps d'écoute 24 h</div><div class="kpi-value">${fmtHours(k.listeningMs)}</div>
+        <div class="kpi-sub">${trend(k.listeningMs, p?.listeningMs, vs)}</div></div>
+      <div class="card kpi"><div class="kpi-label">Pic sur 24 h</div><div class="kpi-value">${fmtNum(k.peak)}</div>
+        <div class="kpi-sub">${k.peakAt ? `à ${fmtTime(k.peakAt).slice(0, 5)}` : '—'} · durée moy. ${k.avgDurationSec != null ? fmtDuration(k.avgDurationSec, true) : '—'}</div></div>
       <div class="card kpi"><div class="kpi-label">Débit sortant</div><div class="kpi-value">${fmtKbps(t.kbps || 0)}</div>
         <div class="kpi-sub">${fmtBytes(k.bytesSent)} envoyés en 24 h</div></div>`);
   }
@@ -89,6 +95,15 @@ export default function dashboard(view, { store, onLive }) {
     ]);
   }
 
+  function renderCountries() {
+    const list = (day?.countries || []).slice(0, 6);
+    $('#countries', view).innerHTML = String(barList(list, {
+      label: (x) => country(x.code).label,
+      value: (x) => x.unique,
+      empty: 'Pas encore d\'auditeurs aujourd\'hui',
+    }));
+  }
+
   function renderEvents() {
     $('#events', view).innerHTML = events.length
       ? events.map((e) => String(eventItem(e))).join('')
@@ -107,6 +122,7 @@ export default function dashboard(view, { store, onLive }) {
     renderKpis();
     renderMounts();
     renderDay();
+    renderCountries();
     renderEvents();
   }
 

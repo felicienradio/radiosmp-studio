@@ -100,12 +100,34 @@ export function fmtAgo(t) {
 
 const regionNames = new Intl.DisplayNames(['fr'], { type: 'region' });
 export function country(code) {
-  if (!code || code === '?') return { flag: '🌐', name: 'Inconnu' };
-  if (code === 'LAN') return { flag: '🏠', name: 'Réseau local' };
-  const flag = String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+  // Drapeaux en SVG (flag-icons) : Windows n'affiche pas les emojis drapeaux
+  const make = (flag, name) => ({ flag, name, label: html`${flag} ${name}` });
+  if (!code || code === '?') return make(raw('<span class="fi fi-xx"></span>'), 'Inconnu');
+  if (code === 'LAN') return make(raw('<span class="fi fi-lan"></span>'), 'Réseau local');
   let name = code;
   try { name = regionNames.of(code) || code; } catch {}
-  return { flag, name };
+  return make(raw(`<span class="fi fi-${code.toLowerCase().replace(/[^a-z]/g, '')}"></span>`), name);
+}
+
+/** Durée d'écoute au format des rapports radio : « 659h12 ». */
+export function fmtHours(ms) {
+  const min = Math.round((ms || 0) / 60000);
+  return `${nf.format(Math.floor(min / 60))}h${String(min % 60).padStart(2, '0')}`;
+}
+
+/** Pastille d'évolution par rapport à la période précédente. */
+export function trend(cur, prev, { suffix = 'vs période préc.' } = {}) {
+  if (prev === null || prev === undefined) return '';
+  if (!prev) return cur ? html`<span class="trend up">nouveau</span>` : '';
+  const d = Math.round(((cur - prev) / prev) * 100);
+  const cls = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
+  const value = d > 999 ? `×${fmtDec(cur / prev)}` : `${Math.abs(d)} %`;
+  return html`<span class="trend ${cls}">${d > 0 ? '▲' : d < 0 ? '▼' : '='} ${value}</span><span>${suffix}</span>`;
+}
+
+export function insight(text) {
+  if (!text) return '';
+  return html`<div class="insight"><b>À retenir</b><span>${text}</span></div>`;
 }
 
 // ---------- Icônes (traits 24×24) ----------
@@ -137,6 +159,11 @@ const ICONS = {
   tag: '<path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/>',
   globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+  printer: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 };
 

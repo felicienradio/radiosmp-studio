@@ -32,9 +32,10 @@ ff.on('exit', (code) => process.exit(code ?? 0));
 const auth = 'Basic ' + Buffer.from(`${ice.adminUser}:${ice.adminPassword}`).toString('base64');
 async function setTitle() {
   const song = titles[n++ % titles.length];
-  const url = `http://${host}/admin/metadata?mount=${encodeURIComponent(mount)}&mode=updinfo&song=${encodeURIComponent(song)}`;
+  const url = `http://${host}/admin/metadata?mount=${encodeURIComponent(mount)}&mode=updinfo&charset=UTF-8&song=${encodeURIComponent(song)}`;
   try {
-    await fetch(url, { method: 'POST', headers: { Authorization: auth } });
+    // GET : accepté par Icecast 2.4 et 2.5
+    await fetch(url, { headers: { Authorization: auth } });
     console.log(`Titre : ${song}`);
   } catch {}
 }

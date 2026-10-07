@@ -18,6 +18,9 @@ function alpha(color, a) {
   return color;
 }
 
+// Rendu immédiat : plus net pour un tableau de bord rafraîchi en continu et pour l'export PDF
+if (typeof Chart !== 'undefined') Chart.defaults.animation = false;
+
 const charts = new WeakMap();
 
 const MIN = 60_000;
@@ -145,5 +148,87 @@ export function barChart(canvas, labels, values, { label = 'Sessions' } = {}) {
     },
   });
   charts.set(canvas, chart);
+  return chart;
+}
+
+/**
+ * Graphique combiné à catégories (barres et/ou courbes), avec un second axe optionnel à droite.
+ * datasets : [{ type: 'bar'|'line', label, data, color?, axis?: 'y'|'y2', dashed?, fill? }]
+ */
+export function comboChart(canvas, labels, datasets, { y2Label = '', yLabel = '', stacked = false } = {}) {
+  charts.get(canvas)?.destroy();
+  const t = theme();
+  const hasY2 = datasets.some((d) => d.axis === 'y2');
+  const chart = new Chart(canvas, {
+    data: {
+      labels,
+      datasets: datasets.map((d, i) => {
+        const color = d.color || t.c[i % t.c.length];
+        const line = d.type === 'line';
+        return {
+          type: d.type || 'bar',
+          label: d.label,
+          data: d.data,
+          yAxisID: d.axis || 'y',
+          order: line ? 0 : 1,
+          borderColor: color,
+          backgroundColor: line ? (d.fill ? alpha(color, 0.18) : color) : alpha(color, d.soft ? 0.35 : 0.85),
+          fill: !!d.fill,
+          borderWidth: line ? 2.5 : 0,
+          borderDash: d.dashed ? [6, 5] : [],
+          borderRadius: line ? 0 : 6,
+          pointRadius: line ? 0 : undefined,
+          pointHoverRadius: 4,
+          tension: 0.35,
+          maxBarThickness: 34,
+        };
+      }),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { stacked, ticks: { color: t.text, maxRotation: 0, autoSkip: true, maxTicksLimit: 16 }, grid: { display: false }, border: { display: false } },
+        y: {
+          stacked,
+          beginAtZero: true,
+          title: { display: !!yLabel, text: yLabel, color: t.text },
+          ticks: { color: t.text, precision: 0, maxTicksLimit: 6 },
+          grid: { color: t.grid, drawTicks: false },
+          border: { display: false },
+        },
+        ...(hasY2 ? {
+          y2: {
+            position: 'right',
+            beginAtZero: true,
+            title: { display: !!y2Label, text: y2Label, color: t.text },
+            ticks: { color: t.text, precision: 0, maxTicksLimit: 6 },
+            grid: { display: false },
+            border: { display: false },
+          },
+        } : {}),
+      },
+      plugins: {
+        legend: { display: datasets.length > 1, labels: { color: t.text, boxWidth: 12, boxHeight: 12, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            label: (item) => ` ${item.dataset.label} : ${Number(item.parsed.y).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}`,
+          },
+        },
+      },
+    },
+  });
+  charts.set(canvas, chart);
+  return chart;
+}
+
+/** Aire empilée par flux au fil du temps. */
+export function stackedArea(canvas, times, series, { timeFormat = 'time', min, max } = {}) {
+  const chart = lineChart(canvas, series.map((s) => ({ ...s, data: s.data.map((y, i) => ({ x: times[i], y })) })), { timeFormat, min, max });
+  chart.options.scales.y.stacked = true;
+  chart.data.datasets.forEach((d) => { d.fill = true; });
+  chart.update('none');
   return chart;
 }

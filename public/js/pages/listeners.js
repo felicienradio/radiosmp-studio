@@ -23,7 +23,7 @@ export default function listenersPage(view, { store, onLive, topbar }) {
     </div>
     <div class="grid cols-3 mt">
       <div class="card"><div class="card-head"><h2>Par flux</h2></div><div id="by-mount"></div></div>
-      <div class="card"><div class="card-head"><h2>Par lecteur</h2></div><div id="by-player"></div></div>
+      <div class="card"><div class="card-head"><h2>Par appareil</h2></div><div id="by-player"></div></div>
       <div class="card"><div class="card-head"><h2>Par pays</h2></div><div id="by-country"></div></div>
     </div>
     <div class="card flush mt">
@@ -33,7 +33,7 @@ export default function listenersPage(view, { store, onLive, topbar }) {
         <input id="search" placeholder="Rechercher IP, lecteur…" style="width:220px">
       </div>
       <div class="table-wrap mt"><table>
-        <thead><tr><th>Flux</th><th>Pays</th><th>IP</th><th>Lecteur</th><th>Système</th><th>User-Agent</th><th class="num">Durée</th><th>Arrivée</th><th></th></tr></thead>
+        <thead><tr><th>Flux</th><th>Localisation</th><th>IP</th><th>Lecteur</th><th>Appareil</th><th>User-Agent</th><th class="num">Durée</th><th>Arrivée</th><th></th></tr></thead>
         <tbody id="rows"></tbody>
       </table></div>
     </div>`);
@@ -64,9 +64,9 @@ export default function listenersPage(view, { store, onLive, topbar }) {
     $('#k-avg', view).textContent = all.length ? fmtDuration(all.reduce((a, l) => a + l.duration, 0) / all.length, true) : '—';
     $('#k-ips', view).textContent = fmtNum(new Set(all.map((l) => l.ip)).size);
     $('#by-mount', view).innerHTML = String(barList(group(all, (l) => l.mount), { empty: 'Personne à l\'écoute' }));
-    $('#by-player', view).innerHTML = String(barList(group(all, (l) => l.player), { empty: 'Personne à l\'écoute' }));
+    $('#by-player', view).innerHTML = String(barList(group(all, (l) => l.device || l.player), { empty: 'Personne à l\'écoute' }));
     $('#by-country', view).innerHTML = String(barList(group(all, (l) => l.country || '?'), {
-      label: (x) => { const c = country(x.label); return `${c.flag} ${c.name}`; },
+      label: (x) => country(x.label).label,
       empty: 'Personne à l\'écoute',
     }));
     $('#rows', view).innerHTML = list.length

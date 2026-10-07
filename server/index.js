@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
-import { ROOT, loadSettings, getSettings, updateSettings, randomPassword } from './settings.js';
-import { logEvent } from './db.js';
+import { ROOT, loadSettings, getSettings, updateSettings, randomPassword, detectIcecastPaths } from './settings.js';
+import { logEvent, backfillSessions } from './db.js';
+import { parseUserAgent } from './useragent.js';
 import { IcecastApi, IcecastError } from './icecast/api.js';
 import { IcecastProcess, LOG_DIR, readTail } from './icecast/process.js';
 import { Collector } from './collector.js';
 import * as stats from './stats.js';
-import { initGeo, geoStatus, downloadGeo } from './geo.js';
+import { initGeo, geoStatus, downloadGeo, lookup } from './geo.js';
 import { authRoutes, requireAuth, changePassword } from './auth.js';
 
 const settings = loadSettings();
@@ -19,6 +20,9 @@ const api = new IcecastApi(() => (ice().managed && proc.state === 'running' && p
 const collector = new Collector({ api, proc, getSettings });
 
 await initGeo();
+// Sessions enregistrées avant l'ajout du type d'appareil
+const filled = backfillSessions({ parseUserAgent, lookup });
+if (filled) console.log(`${filled} sessions complétées (type d'appareil)`);
 
 const app = express();
 app.disable('x-powered-by');
@@ -72,7 +76,7 @@ setInterval(() => broadcast('ping', Date.now()), 25_000);
 
 // ---------- Statistiques ----------
 
-app.get('/api/stats/overview', wrap((req) => stats.overview(req.query)));
+app.get('/api/stats/overview', wrap((req) => ({ ...stats.overview(req.query), geo: geoStatus() })));
 app.get('/api/stats/tracks', wrap((req) => stats.tracks(req.query)));
 app.get('/api/stats/sessions', wrap((req) => stats.sessions(req.query)));
 app.get('/api/stats/sessions.csv', (req, res) => {
@@ -125,7 +129,13 @@ function cleanMount(input, existingId) {
   if (m.fallbackMount && !m.fallbackMount.startsWith('/')) m.fallbackMount = '/' + m.fallbackMount;
   if (m.fallbackMount === m.name) throw fail('Le flux de secours doit être un autre point de montage');
   if (m.relayUrl && !/^https?:\/\/.+/i.test(m.relayUrl)) throw fail('L\'URL du relais doit commencer par http:// ou https://');
-  if (/[<>&"]/.test(m.password)) throw fail('Le mot de passe ne doit pas contenir < > & "');
+  // Chaque point de montage a son propre mot de passe de diffusion
+  if (!m.relayUrl && !m.password) m.password = randomPassword();
+  if (!m.username) m.username = 'source';
+  if (m.password && m.password.length < 4) throw fail('Le mot de passe de diffusion doit faire au moins 4 caractères');
+  if (/[<>&"\s]/.test(m.password) || /[<>&"\s:]/.test(m.username)) {
+    throw fail('Mot de passe et utilisateur : pas d\'espaces ni de < > & " (ni : pour l\'utilisateur)');
+  }
   return m;
 }
 
@@ -156,6 +166,15 @@ app.put('/api/mounts/:id', wrap((req) => {
   updateSettings((s) => { s.icecast.mounts[idx] = m; });
   logEvent('info', 'config', `Point de montage ${m.name} modifié`, m.name);
   return { mount: m, process: proc.status() };
+}));
+
+app.post('/api/mounts/:id/password', wrap((req) => {
+  const idx = ice().mounts.findIndex((x) => x.id === req.params.id);
+  if (idx < 0) throw fail('Point de montage introuvable', 404);
+  const password = randomPassword();
+  updateSettings((s) => { s.icecast.mounts[idx].password = password; });
+  logEvent('info', 'config', 'Nouveau mot de passe de diffusion généré', ice().mounts[idx].name);
+  return { password, process: proc.status() };
 }));
 
 app.delete('/api/mounts/:id', wrap((req) => {
@@ -200,6 +219,9 @@ function serverView() {
       limits: i.limits,
     },
     collector: getSettings().collector,
+    timezone: getSettings().timezone,
+    branding: getSettings().branding,
+    platform: process.platform,
     dashboard: { host: getSettings().dashboard.host, port: getSettings().dashboard.port },
     geo: geoStatus(),
     icecastAdminUrl: `http://${i.managed ? '127.0.0.1:' + i.port : i.apiUrl.replace(/^https?:\/\//, '')}/admin/`,
@@ -225,7 +247,10 @@ app.put('/api/server/settings', wrap((req) => {
   updateSettings((s) => {
     const i = s.icecast;
     if ('managed' in b) i.managed = !!b.managed;
-    if ('binary' in b) i.binary = str(b.binary, 500);
+    if ('binary' in b && str(b.binary, 500) !== i.binary) {
+      i.binary = str(b.binary, 500);
+      Object.assign(i, detectIcecastPaths(i.binary));
+    }
     if ('autoStart' in b) i.autoStart = !!b.autoStart;
     if ('autoRestart' in b) i.autoRestart = !!b.autoRestart;
     if ('apiUrl' in b) i.apiUrl = str(b.apiUrl, 300);
@@ -246,6 +271,19 @@ app.put('/api/server/settings', wrap((req) => {
       if ('clientTimeout' in l) i.limits.clientTimeout = int(l.clientTimeout, 1, 3600);
       if ('headerTimeout' in l) i.limits.headerTimeout = int(l.headerTimeout, 1, 3600);
       if ('sourceTimeout' in l) i.limits.sourceTimeout = int(l.sourceTimeout, 1, 3600);
+    }
+    if ('timezone' in b) {
+      try {
+        new Intl.DateTimeFormat('fr-FR', { timeZone: b.timezone });
+      } catch {
+        throw fail('Fuseau horaire inconnu (exemple : Europe/Paris)');
+      }
+      s.timezone = b.timezone;
+    }
+    if (b.branding) {
+      if ('name' in b.branding) s.branding.name = str(b.branding.name, 60) || 'Ma radio';
+      if ('slogan' in b.branding) s.branding.slogan = str(b.branding.slogan, 120);
+      if ('website' in b.branding) s.branding.website = str(b.branding.website, 200);
     }
     if (b.collector) {
       if ('intervalSec' in b.collector) s.collector.intervalSec = int(b.collector.intervalSec, 2, 300);
@@ -278,9 +316,12 @@ app.get('/api/server/config', wrap(() => ({
   xml: fs.existsSync(proc.configFile) ? fs.readFileSync(proc.configFile, 'utf8') : '',
 })));
 
-app.post('/api/geo/download', wrap(async () => {
-  const r = await downloadGeo();
-  logEvent('info', 'config', `Base GeoIP installée (${r.month})`);
+app.post('/api/geo/download', wrap(async (req) => {
+  const kind = req.body?.kind === 'country' ? 'country' : 'city';
+  const r = await downloadGeo(kind);
+  // Localise aussi les auditeurs déjà enregistrés
+  const n = backfillSessions({ parseUserAgent, lookup, geo: true });
+  logEvent('info', 'config', `Base GeoIP ${kind === 'city' ? 'villes' : 'pays'} installée (${r.month}), ${n} sessions localisées`);
   return geoStatus();
 }));
 
@@ -289,6 +330,11 @@ app.post('/api/dashboard/password', changePassword);
 // ---------- Interface ----------
 
 app.use('/vendor/chart.js', express.static(path.join(ROOT, 'node_modules/chart.js/dist')));
+app.use('/vendor/leaflet', express.static(path.join(ROOT, 'node_modules/leaflet/dist')));
+// Fond de carte embarqué (Natural Earth via world-atlas) : aucune dépendance à un service de tuiles
+app.use('/vendor/world-atlas', express.static(path.join(ROOT, 'node_modules/world-atlas'), { maxAge: '7d' }));
+app.use('/vendor/topojson', express.static(path.join(ROOT, 'node_modules/topojson-client/dist')));
+app.use('/vendor/flag-icons', express.static(path.join(ROOT, 'node_modules/flag-icons'), { maxAge: '7d' }));
 app.use(express.static(path.join(ROOT, 'public'), { index: 'index.html' }));
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { DATA_DIR } from '../settings.js';
 import { buildConfig } from './config.js';
@@ -29,6 +29,23 @@ function processName(pid) {
       resolve(m && Number(m[2]) === pid ? m[1] : null);
     });
   });
+}
+
+const versions = new Map();
+/** Version d'Icecast (« 2.4.4 », « 2.5.0 »…) d'après `icecast -v`, mise en cache par exécutable. */
+export function icecastVersion(binary) {
+  if (!versions.has(binary)) {
+    let v = '';
+    try {
+      const out = execFileSync(binary, ['-v'], { timeout: 5000, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      v = out.match(/(\d+\.\d+\.\d+)/)?.[1] || '';
+    } catch (err) {
+      v = String(err.stdout || '').match(/(\d+\.\d+\.\d+)/)?.[1] || '';
+    }
+    if (v || !fs.existsSync(binary)) versions.set(binary, v);
+    else return v;
+  }
+  return versions.get(binary);
 }
 
 async function isIcecastPid(pid) {
@@ -69,9 +86,10 @@ export class IcecastProcess extends EventEmitter {
       lastError: this.lastError,
       binary: ice.binary,
       binaryFound: fs.existsSync(ice.binary),
+      version: ice.managed ? icecastVersion(ice.binary) : null,
       configFile: CONFIG_FILE,
       pendingRestart: ice.managed && this.state === 'running' && this.appliedConfig !== null
-        && this.appliedConfig !== buildConfig(ice),
+        && this.appliedConfig !== buildConfig(ice, icecastVersion(ice.binary)),
     };
   }
 
@@ -83,7 +101,8 @@ export class IcecastProcess extends EventEmitter {
 
   writeConfig() {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    const xml = buildConfig(this.getConfig());
+    const ice = this.getConfig();
+    const xml = buildConfig(ice, icecastVersion(ice.binary));
     fs.writeFileSync(CONFIG_FILE, xml);
     return xml;
   }
@@ -141,6 +160,10 @@ export class IcecastProcess extends EventEmitter {
     if (this.state === 'running') return;
     if (!fs.existsSync(ice.binary)) {
       this.setState('stopped', `Exécutable Icecast introuvable : ${ice.binary}`);
+      throw new Error(this.lastError);
+    }
+    if (process.platform !== 'win32' && process.getuid?.() === 0) {
+      this.setState('stopped', 'Icecast refuse de tourner en root : lancez le dashboard avec un utilisateur dédié (voir scripts/install-lxc.sh)');
       throw new Error(this.lastError);
     }
     if (await this.reachable()) {

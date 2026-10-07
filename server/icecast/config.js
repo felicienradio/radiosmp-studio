@@ -1,4 +1,5 @@
-import path from 'node:path';
+import fs from 'node:fs';
+import { detectIcecastPaths } from '../settings.js';
 
 const esc = (v) => String(v ?? '')
   .replace(/&/g, '&amp;')
@@ -13,11 +14,16 @@ function tag(name, value, indent) {
   return `${indent}<${name}>${esc(value)}</${name}>\n`;
 }
 
-/** Racine d'installation d'Icecast (dossier qui contient web/ et admin/). */
-export function icecastHome(binary) {
-  const dir = path.dirname(binary);
-  return path.basename(dir).toLowerCase() === 'bin' ? path.dirname(dir) : dir;
+/** Dossiers web/ et admin/ d'Icecast : ceux des réglages s'ils existent, sinon détection. */
+export function icecastPaths(ice) {
+  if (ice.webroot && ice.adminroot && fs.existsSync(ice.webroot) && fs.existsSync(ice.adminroot)) {
+    return { webroot: ice.webroot, adminroot: ice.adminroot };
+  }
+  return detectIcecastPaths(ice.binary);
 }
+
+/** Icecast 2.5 a changé la syntaxe de certains blocs (relais, en-têtes HTTP). Debian fournit la 2.4. */
+export const isLegacy = (version) => /^2\.[0-4]\./.test(version || '');
 
 function mountXml(m) {
   const i = '        ';
@@ -33,6 +39,8 @@ function mountXml(m) {
     x += tag('fallback-override', bool(m.fallbackOverride), i);
     x += tag('fallback-when-full', bool(m.fallbackWhenFull), i);
   }
+  // Métadonnées des encodeurs en UTF-8 (accents des titres)
+  x += tag('charset', 'UTF-8', i);
   x += tag('hidden', bool(m.hidden), i);
   x += tag('public', bool(m.public), i);
   x += tag('stream-name', m.streamName, i);
@@ -43,7 +51,18 @@ function mountXml(m) {
   return x;
 }
 
-function relayXml(m) {
+function relayXml(m, legacy) {
+  if (legacy) {
+    const u = new URL(m.relayUrl);
+    return `    <relay>
+        <server>${esc(u.hostname)}</server>
+        <port>${esc(u.port || (u.protocol === 'https:' ? 443 : 80))}</port>
+        <mount>${esc(u.pathname + u.search)}</mount>
+        <local-mount>${esc(m.name)}</local-mount>
+        <on-demand>${bool(m.onDemand)}</on-demand>
+        <relay-shoutcast-metadata>1</relay-shoutcast-metadata>
+    </relay>\n`;
+  }
   return `    <relay>
         <local-mount>${esc(m.name)}</local-mount>
         <on-demand>${m.onDemand ? 'true' : 'false'}</on-demand>
@@ -54,9 +73,17 @@ function relayXml(m) {
     </relay>\n`;
 }
 
+function headersXml(legacy) {
+  if (legacy) return '        <header name="Access-Control-Allow-Origin" value="*" />\n';
+  return `        <header type="cors" name="Access-Control-Allow-Origin" />
+        <header type="cors" name="Access-Control-Allow-Headers" />
+        <header type="cors" name="Access-Control-Expose-Headers" />\n`;
+}
+
 /** Génère le fichier icecast.xml à partir des réglages du dashboard. */
-export function buildConfig(ice) {
-  const home = icecastHome(ice.binary);
+export function buildConfig(ice, version = '') {
+  const { webroot, adminroot } = icecastPaths(ice);
+  const legacy = isLegacy(version);
   const l = ice.limits;
   const mounts = ice.mounts || [];
   return `<?xml version="1.0"?>
@@ -89,27 +116,28 @@ export function buildConfig(ice) {
     </listen-socket>
 
     <http-headers>
-        <header type="cors" name="Access-Control-Allow-Origin" />
-        <header type="cors" name="Access-Control-Allow-Headers" />
-        <header type="cors" name="Access-Control-Expose-Headers" />
-    </http-headers>
+${headersXml(legacy)}    </http-headers>
 
 ${mounts.filter((m) => !m.relayUrl).map(mountXml).join('\n')}
-${mounts.filter((m) => m.relayUrl).map(relayXml).join('\n')}
+${mounts.filter((m) => m.relayUrl).map((m) => relayXml(m, legacy)).join('\n')}
     <paths>
         <logdir>./log</logdir>
-        <webroot>${esc(path.join(home, 'web'))}</webroot>
-        <adminroot>${esc(path.join(home, 'admin'))}</adminroot>
+        <webroot>${esc(webroot)}</webroot>
+        <adminroot>${esc(adminroot)}</adminroot>
         <alias source="/" destination="/status.xsl"/>
     </paths>
 
     <logging>
         <accesslog>access.log</accesslog>
         <errorlog>error.log</errorlog>
-        <loglevel>information</loglevel>
+        <loglevel>${legacy ? 3 : 'information'}</loglevel>
         <logsize>10000</logsize>
         <logarchive>1</logarchive>
     </logging>
+
+    <security>
+        <chroot>0</chroot>
+    </security>
 </icecast>
 `;
 }

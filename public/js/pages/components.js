@@ -1,5 +1,5 @@
 import { playIcon, playUrl } from '../player.js';
-import { html, icon, fmtNum, fmtDuration, fmtKbps, fmtDateTime, fmtTime, country } from '../lib.js';
+import { html, icon, fmtNum, fmtDuration, fmtKbps, fmtDateTime, fmtTime, country, secret } from '../lib.js';
 
 export const RANGES = [
   ['1h', '1 h'], ['24h', '24 h'], ['7d', '7 j'], ['30d', '30 j'], ['90d', '90 j'], ['365d', '1 an'],
@@ -29,7 +29,7 @@ export function formatInfo(live) {
 }
 
 /** Carte d'un point de montage (configuré et/ou en direct). */
-export function mountCard(m, { actions = true } = {}) {
+export function mountCard(m, { actions = true, access = false } = {}) {
   const live = m.live;
   const name = live?.name || m.streamName || m.name;
   const max = live?.maxListeners || m.maxListeners || 0;
@@ -62,6 +62,12 @@ export function mountCard(m, { actions = true } = {}) {
       ${max ? html`<div><div class="row between small muted"><span>Capacité</span><span>${fmtNum(live?.listeners || 0)} / ${fmtNum(max)}</span></div>
         <div class="meter"><div style="width:${pct}%;background:${pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--ok)'}"></div></div></div>` : ''}
       ${live ? html`<div class="small dim">${formatInfo(live)}${live.encoder ? ` · ${live.encoder}` : ''}</div>` : ''}
+      ${access && m.configured && !m.relayUrl ? html`<div class="access">
+        <span class="k">${icon('lock')}</span><span class="small"><b>Accès diffusion</b> <span class="dim">(propre à ce flux)</span></span>
+        <span class="k">Utilisateur</span><span><code>${m.username || 'source'}</code></span>
+        <span class="k">Mot de passe</span><span class="row" style="gap:4px">${m.password ? secret(m.password) : html`<span class="badge warn">mot de passe global</span>`}
+          <button class="copy" data-act="regen" data-id="${m.id}" data-name="${m.name}" title="Générer un nouveau mot de passe">${icon('refresh')}</button></span>
+      </div>` : ''}
       ${actions ? html`<div class="row">
         <button class="btn sm" data-act="details" data-name="${m.name}">${icon('link')} Connexion</button>
         ${live ? html`<button class="btn sm" data-act="metadata" data-name="${m.name}">${icon('tag')} Titre</button>` : ''}
@@ -77,10 +83,10 @@ export function listenerRow(l, { kick = true } = {}) {
   const c = country(l.country);
   return html`<tr>
     <td><code>${l.mount}</code></td>
-    <td class="nowrap">${c.flag} ${c.name}</td>
+    <td class="nowrap">${c.flag} ${l.city ? `${l.city}, ` : ''}${c.name}</td>
     <td><code>${l.ip}</code></td>
     <td>${l.player}</td>
-    <td>${l.os}</td>
+    <td title="${l.os}">${l.device || l.os}</td>
     <td class="truncate dim small" title="${l.userAgent}">${l.userAgent || '—'}</td>
     <td class="num nowrap" data-since="${l.startedAt}">${fmtDuration(l.duration)}</td>
     <td class="nowrap dim small">${fmtTime(l.startedAt)}</td>

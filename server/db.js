@@ -66,6 +66,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 `);
 
+// Migrations : colonnes ajoutées après la première version
+const sessionCols = new Set(db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name));
+for (const [col, type] of [['device', 'TEXT'], ['city', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL']]) {
+  if (!sessionCols.has(col)) db.exec(`ALTER TABLE sessions ADD COLUMN ${col} ${type}`);
+}
+
 export function tx(fn) {
   db.exec('BEGIN');
   try {
@@ -78,7 +84,27 @@ export function tx(fn) {
   }
 }
 
-const insertEvent = db.prepare('INSERT INTO events (ts, level, type, mount, message) VALUES (?, ?, ?, ?, ?)');
+/**
+ * Complète les anciennes sessions : type d'appareil manquant, et localisation
+ * (après l'installation ou la mise à jour d'une base GeoIP).
+ */
+export function backfillSessions({ parseUserAgent, lookup, geo = false }) {
+  const rows = db.prepare(`SELECT id, ip, user_agent FROM sessions WHERE device IS NULL${geo ? ' OR country IS NULL OR city IS NULL' : ''}`).all();
+  if (!rows.length) return 0;
+  const update = db.prepare('UPDATE sessions SET device = ?, country = COALESCE(?, country), city = COALESCE(?, city), lat = COALESCE(?, lat), lon = COALESCE(?, lon) WHERE id = ?');
+  const cache = new Map();
+  tx(() => {
+    for (const r of rows) {
+      const { device } = parseUserAgent(r.user_agent || '');
+      let g = cache.get(r.ip);
+      if (!g) cache.set(r.ip, (g = lookup(r.ip)));
+      update.run(device, g.country, g.city, g.lat, g.lon, r.id);
+    }
+  });
+  return rows.length;
+}
+
+const insertEvent =db.prepare('INSERT INTO events (ts, level, type, mount, message) VALUES (?, ?, ?, ?, ?)');
 
 export function logEvent(level, type, message, mount = null) {
   insertEvent.run(Date.now(), level, type, mount, message);
