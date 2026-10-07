@@ -61,7 +61,8 @@ export function mountCard(m, { actions = true, access = false } = {}) {
       </div>
       ${max ? html`<div><div class="row between small muted"><span>Capacité</span><span>${fmtNum(live?.listeners || 0)} / ${fmtNum(max)}</span></div>
         <div class="meter"><div style="width:${pct}%;background:${pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--ok)'}"></div></div></div>` : ''}
-      ${live ? html`<div class="small dim">${formatInfo(live)}${live.encoder ? ` · ${live.encoder}` : ''}</div>` : ''}
+      ${live || m.configured ? html`<div class="small dim">${live ? formatInfo(live) : ''}${live?.encoder ? ` · ${live.encoder}` : ''}${m.configured
+        ? html`${live ? ' · ' : ''}<span title="Buffer de démarrage">${m.startMode === 'instant' ? '⚡ Démarrage instantané' : '⏱ Faible latence'}</span>` : ''}</div>` : ''}
       ${access && m.configured && !m.relayUrl ? html`<div class="access">
         <span class="k">${icon('lock')}</span><span class="small"><b>Accès diffusion</b> <span class="dim">(propre à ce flux)</span></span>
         <span class="k">Utilisateur</span><span><code>${m.username || 'source'}</code></span>

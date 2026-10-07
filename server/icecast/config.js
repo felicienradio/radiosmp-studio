@@ -25,7 +25,7 @@ export function icecastPaths(ice) {
 /** Icecast 2.5 a changé la syntaxe de certains blocs (relais, en-têtes HTTP). Debian fournit la 2.4. */
 export const isLegacy = (version) => /^2\.[0-4]\./.test(version || '');
 
-function mountXml(m) {
+function mountXml(m, burst) {
   const i = '        ';
   let x = '    <mount type="normal">\n';
   x += tag('mount-name', m.name, i);
@@ -34,6 +34,8 @@ function mountXml(m) {
     x += tag('password', m.password, i);
   }
   if (m.maxListeners > 0) x += tag('max-listeners', m.maxListeners, i);
+  // Buffer de démarrage propre au flux : 0 = faible latence, sinon quelques secondes d'avance envoyées d'un coup
+  x += tag('burst-size', m.startMode === 'instant' ? burst : 0, i);
   if (m.fallbackMount) {
     x += tag('fallback-mount', m.fallbackMount, i);
     x += tag('fallback-override', bool(m.fallbackOverride), i);
@@ -118,7 +120,7 @@ export function buildConfig(ice, version = '') {
     <http-headers>
 ${headersXml(legacy)}    </http-headers>
 
-${mounts.filter((m) => !m.relayUrl).map(mountXml).join('\n')}
+${mounts.filter((m) => !m.relayUrl).map((m) => mountXml(m, Number(l.burstSize) || 196608)).join('\n')}
 ${mounts.filter((m) => m.relayUrl).map((m) => relayXml(m, legacy)).join('\n')}
     <paths>
         <logdir>./log</logdir>

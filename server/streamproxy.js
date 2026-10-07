@@ -41,6 +41,7 @@ export function relayStream(req, res, { port, mount }) {
       if (/^(content-type|icy-|ice-|cache-control|pragma|expires|access-control-)/i.test(k)) out[k] = v;
     }
     out['X-Accel-Buffering'] = 'no'; // Nginx : ne pas mettre le flux en tampon
+    res.socket?.setNoDelay(true); // pas d'attente pour regrouper les paquets : l'audio part tout de suite
     res.writeHead(up.statusCode || 502, out);
     res.flushHeaders();
     up.pipe(res);

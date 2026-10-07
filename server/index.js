@@ -54,6 +54,17 @@ const fail = (message, status = 400) => Object.assign(new Error(message), { stat
 authRoutes(app);
 app.use('/api', requireAuth);
 
+// Adresse publique des flux : déduite automatiquement la première fois que le dashboard est ouvert
+// en HTTPS par un nom de domaine (ex. https://icecast.radiosmp.fr) → liens https://domaine/<mount>
+app.use('/api', (req, res, next) => {
+  const host = req.get('host') || '';
+  if (!ice().publicUrl && req.secure && host && !/^(localhost|\[|\d+\.\d+\.\d+\.\d+)/i.test(host)) {
+    updateSettings((s) => { s.icecast.publicUrl = `https://${host}`; });
+    logEvent('info', 'config', `Adresse publique des flux détectée : https://${host}`);
+  }
+  next();
+});
+
 // ---------- Temps réel ----------
 
 const clients = new Set();
@@ -114,7 +125,7 @@ const MOUNT_FIELDS = {
   name: 'string', streamName: 'string', description: 'string', genre: 'string', url: 'string',
   maxListeners: 'number', username: 'string', password: 'string', fallbackMount: 'string',
   fallbackOverride: 'boolean', fallbackWhenFull: 'boolean', hidden: 'boolean', public: 'boolean',
-  relayUrl: 'string', onDemand: 'boolean',
+  relayUrl: 'string', onDemand: 'boolean', startMode: 'string',
 };
 
 function cleanMount(input, existingId) {
@@ -125,6 +136,8 @@ function cleanMount(input, existingId) {
     else if (type === 'number') m[k] = Math.max(0, Math.floor(Number(v) || 0));
     else m[k] = !!v;
   }
+  // Buffer : « instant » = le son part au clic (quelques secondes d'avance), « lowlatency » = buffer 0, au plus près du direct
+  if (!['instant', 'lowlatency'].includes(m.startMode)) m.startMode = 'lowlatency';
   if (!m.name.startsWith('/')) m.name = '/' + m.name;
   if (!/^\/[A-Za-z0-9._\-/]+$/.test(m.name) || m.name.includes('..') || m.name.startsWith('/admin')) {
     throw fail('Nom de point de montage invalide (lettres, chiffres, . _ - / uniquement, ex. /live ou /radio.mp3)');

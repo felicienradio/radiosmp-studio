@@ -4,7 +4,7 @@ import { mountCard } from './components.js';
 const EMPTY = {
   name: '/', streamName: '', description: '', genre: '', url: '', maxListeners: 0,
   username: '', password: '', fallbackMount: '', fallbackOverride: true, fallbackWhenFull: false,
-  hidden: false, public: false, relayUrl: '', onDemand: false,
+  hidden: false, public: false, relayUrl: '', onDemand: false, startMode: 'lowlatency',
 };
 
 function mountForm(m, others) {
@@ -18,6 +18,12 @@ function mountForm(m, others) {
       <label class="field">Site web<input name="url" value="${m.url}" placeholder="https://"></label>
       <label class="field">Auditeurs max.<input type="number" min="0" name="maxListeners" value="${m.maxListeners}">
         <span class="hint">0 = illimité (dans la limite globale du serveur)</span></label>
+      <label class="field full">Buffer de démarrage<select name="startMode" style="width:100%">
+          <option value="lowlatency" ${m.startMode !== 'instant' ? 'selected' : ''}>Faible latence (buffer 0) : au plus près du direct</option>
+          <option value="instant" ${m.startMode === 'instant' ? 'selected' : ''}>Démarrage instantané : le son part dès le clic sur Play</option>
+        </select>
+        <span class="hint">Faible latence : idéal pour les directs (jeux, appels), le lecteur met 1 à 3 s à démarrer.
+          Démarrage instantané : quelques secondes d'avance envoyées d'un coup, avec autant de décalage sur le direct.</span></label>
     </div>
     <fieldset class="accent">
       <legend>${icon('lock')} Accès diffusion</legend>
@@ -127,7 +133,6 @@ export async function openConnection(name) {
           <h3>Pour vos auditeurs</h3>
           <dl class="kv mt">
             <dt>Lien direct</dt><dd>${copyable(listen)}</dd>
-            ${c.publicUrl && c.publicUrl !== base ? html`<dt>Lien direct (Icecast)</dt><dd>${copyable(`${base}${m.name}`)}</dd>` : ''}
             <dt>Playlist M3U</dt><dd>${copyable(`${listen}.m3u`)}</dd>
             <dt>Infos JSON</dt><dd>${copyable(`${base}/status-json.xsl?mount=${m.name}`)}</dd>
           </dl>
