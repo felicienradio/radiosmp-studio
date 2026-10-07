@@ -29,6 +29,8 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - Démarrage, arrêt, redémarrage d'Icecast, redémarrage automatique en cas de plantage
 - Auditeurs en direct (ville, appareil, lecteur), déconnexion, déplacement vers un autre flux
 - Changement du titre en cours, coupure d'une source, journal des événements et logs Icecast
+- **Flux en HTTPS** relayés par le dashboard (`https://ton-domaine/live`), démarrage rapide du son (burst de 5 s à 320 kbps)
+- **Mises à jour depuis GitHub** en un clic, vérification automatique toutes les 6 heures
 
 ## Installation dans un conteneur LXC Proxmox (Debian 12 / 13)
 
@@ -55,13 +57,13 @@ Le dashboard est alors sur `http://IP-DU-CONTENEUR:3000` et Icecast sur le port 
 Le script installe Icecast (paquet Debian 2.4.4), Node.js 22, l'utilisateur `flux` (Icecast refuse de tourner en root)
 et le service `flux` lancé au démarrage du conteneur.
 
-**Mise à jour** :
+**Mises à jour** : en un clic depuis le dashboard (**Serveur** → **Mises à jour**), avec vérification automatique
+toutes les 6 heures. Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser.
+Détails et première configuration : [guide, section « Mettre à jour »](docs/INSTALLATION-PROXMOX.md#mettre-à-jour).
 
-```bash
-cd /root/radiosmp-studio && git pull && bash scripts/install-lxc.sh
-```
-
-Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser pendant la mise à jour.
+**Flux en HTTPS** : le dashboard relaie les flux. Derrière ton reverse proxy HTTPS, `https://ton-domaine/live` sert
+directement le flux, avec l'IP réelle des auditeurs dans les stats
+([configuration](docs/INSTALLATION-PROXMOX.md#flux-en-https)).
 
 ## Installation sous Windows
 

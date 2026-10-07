@@ -102,7 +102,7 @@ export async function openConnection(name) {
   const base = c.managed ? `http://${c.host}:${c.port}` : c.apiUrl.replace(/\/+$/, '');
   const host = base.replace(/^https?:\/\//, '').split(':')[0];
   const port = base.split(':')[2] || c.port;
-  const listen = `${base}${m.name}`;
+  const listen = `${c.publicUrl || base}${m.name}`;
   const embed = `<audio controls preload="none" src="${listen}"></audio>`;
   modal({
     title: `Connexion à ${m.name}`,
@@ -127,8 +127,8 @@ export async function openConnection(name) {
           <h3>Pour vos auditeurs</h3>
           <dl class="kv mt">
             <dt>Lien direct</dt><dd>${copyable(listen)}</dd>
+            ${c.publicUrl && c.publicUrl !== base ? html`<dt>Lien direct (Icecast)</dt><dd>${copyable(`${base}${m.name}`)}</dd>` : ''}
             <dt>Playlist M3U</dt><dd>${copyable(`${listen}.m3u`)}</dd>
-            <dt>Playlist XSPF</dt><dd>${copyable(`${listen}.xspf`)}</dd>
             <dt>Infos JSON</dt><dd>${copyable(`${base}/status-json.xsl?mount=${m.name}`)}</dd>
           </dl>
           <h3 class="mt">Lecteur à intégrer sur votre site</h3>

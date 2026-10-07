@@ -60,6 +60,8 @@ function defaults() {
       // Adresse utilisée par le dashboard pour interroger Icecast (mode externe)
       apiUrl: 'http://127.0.0.1:8000',
       hostname: process.env.FLUX_PUBLIC_HOST || 'localhost',
+      // Adresse publique des flux, ex. https://icecast.radiosmp.fr (flux relayés par le dashboard)
+      publicUrl: '',
       port: 8000,
       location: 'France',
       adminEmail: 'admin@localhost',
@@ -70,8 +72,8 @@ function defaults() {
       limits: {
         clients: 500,
         sources: 10,
-        queueSize: 524288,
-        burstSize: 65535,
+        queueSize: 1048576,
+        burstSize: 196608,
         clientTimeout: 30,
         headerTimeout: 15,
         sourceTimeout: 10,
@@ -124,6 +126,12 @@ export function loadSettings() {
   current = merge(defaults(), stored);
   // Dossiers web/admin : déduits de l'exécutable choisi s'ils n'ont pas été réglés
   if (!stored.icecast?.webroot) Object.assign(current.icecast, detectIcecastPaths(current.icecast.binary));
+  // Ancien réglage par défaut (64 Ko) : trop court pour les flux à haut débit, le son mettait plusieurs
+  // secondes à démarrer. 192 Ko ≈ 5 s d'avance à 320 kbps.
+  const l = current.icecast.limits;
+  if (l.burstSize === 65535) l.burstSize = 196608;
+  if (l.queueSize < 1048576) l.queueSize = 1048576;
+  saveSettings();
   // Variables d'environnement prioritaires (service systemd, conteneur)
   if (process.env.FLUX_HOST) current.dashboard.host = process.env.FLUX_HOST;
   if (process.env.FLUX_PORT) current.dashboard.port = Number(process.env.FLUX_PORT);

@@ -37,10 +37,8 @@ export const links = { publicBase: '', managed: true, port: 8000 };
 /** Lien public d'un flux (celui à donner aux auditeurs). */
 export const publicUrl = (mount) => `${links.publicBase}${mount}`;
 
-/** Lien d'écoute depuis ce navigateur : même machine que le dashboard quand Icecast est local. */
-export const playUrl = (mount) => (links.managed
-  ? `http://${location.hostname}:${links.port}${mount}`
-  : publicUrl(mount));
+/** Lien d'écoute depuis ce navigateur : relayé par le dashboard (même origine, donc HTTPS si le dashboard l'est). */
+export const playUrl = (mount) => (links.relay ? `${location.origin}${mount}` : publicUrl(mount));
 
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-play]');

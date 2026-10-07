@@ -1,4 +1,4 @@
-import { api, html, icon, $, run, modal, confirmDialog, formData, fmtDateTime, fmtNum, copyable } from '../lib.js';
+import { api, html, icon, $, run, modal, confirmDialog, formData, fmtDateTime, fmtNum, copyable, toast } from '../lib.js';
 import { uptime } from './components.js';
 
 const STATE = {
@@ -70,6 +70,10 @@ export default function serverPage(view, { store, onLive }) {
                 <span class="hint">Adresse par laquelle les auditeurs joignent le serveur (nom de domaine ou IP publique). Utilisée dans les liens d'écoute.</span></label>
               <label class="field" data-managed>Port<input type="number" name="port" value="${st.port}" min="1" max="65535" required>
                 <span class="hint">8000 par défaut. À ouvrir dans le pare-feu et la box pour l'écoute depuis Internet.</span></label>
+              <label class="field full">Adresse publique des flux (HTTPS)<input name="publicUrl" value="${st.publicUrl}" placeholder="https://icecast.radiosmp.fr">
+                <span class="hint">Adresse du dashboard derrière votre reverse proxy HTTPS : les flux y sont relayés
+                  (ex. <code>https://icecast.radiosmp.fr/live</code>) en gardant l'IP réelle des auditeurs. Utilisée dans les liens à partager.
+                  ${data.relayListeners ? `${data.relayListeners} auditeur(s) passent actuellement par ce relais.` : ''}</span></label>
               <label class="field">Localisation<input name="location" value="${st.location}"></label>
               <label class="field">E-mail de contact<input name="adminEmail" value="${st.adminEmail}"></label>
             </div>
@@ -129,6 +133,8 @@ export default function serverPage(view, { store, onLive }) {
           </fieldset>
         </div>
       </form>
+
+      <div class="card mt" id="update-card"><div class="skeleton">Vérification des mises à jour…</div></div>
 
       <div class="grid cols-2 mt">
         <div class="card">
@@ -228,11 +234,99 @@ export default function serverPage(view, { store, onLive }) {
   async function load() {
     data = await api('/server');
     render();
+    loadUpdate();
   }
+
+  // ---------- Mises à jour depuis GitHub ----------
+
+  let update = null;
+  let pollTimer = null;
+  let versionBefore = null;
+
+  function updateCard(u) {
+    const short = (h) => (h ? h.slice(0, 7) : '—');
+    const busy = u.pending || u.state === 'checking' || u.state === 'updating';
+    const badge = {
+      uptodate: ['ok', 'À jour'],
+      available: ['accent', `${u.commits.length || 'Nouvelle'} mise${u.commits.length > 1 ? 's' : ''} à jour disponible${u.commits.length > 1 ? 's' : ''}`],
+      updating: ['warn', 'Mise à jour en cours…'],
+      checking: ['warn', 'Vérification…'],
+      done: ['ok', 'Mise à jour terminée'],
+      'needs-key': ['warn', 'Clé GitHub à ajouter'],
+      error: ['danger', 'Erreur'],
+    }[u.pending ? 'checking' : u.state] || ['', 'Pas encore vérifié'];
+    return html`
+      <div class="card-head"><h2>Mises à jour</h2><span class="badge ${badge[0]}">${badge[1]}</span><div class="spacer"></div>
+        ${u.supported ? html`
+          <button class="btn" data-upd="check" ${busy ? 'disabled' : ''}>${icon('refresh')} Vérifier</button>
+          <button class="btn primary" data-upd="run" ${busy || u.state !== 'available' ? 'disabled' : ''}>${icon('download')} Mettre à jour</button>` : ''}
+      </div>
+      <dl class="kv">
+        <dt>Version installée</dt><dd><code>${short(u.version)}</code>${u.repo && u.version ? html` <a class="small" href="${u.repo}/commit/${u.version}" target="_blank" rel="noopener">voir sur GitHub</a>` : ''}</dd>
+        ${u.latest ? html`<dt>Dernière version</dt><dd><code>${short(u.latest)}</code></dd>` : ''}
+        ${u.checkedAt ? html`<dt>Dernière vérification</dt><dd>${fmtDateTime(u.checkedAt)} <span class="dim small">(automatique toutes les 6 h)</span></dd>` : ''}
+      </dl>
+      ${!u.supported ? html`<p class="muted">Les mises à jour en un clic fonctionnent sur l'installation Linux (conteneur LXC).
+        Ici, mettez à jour avec <code>git pull</code> puis relancez le dashboard.</p>` : ''}
+      ${u.error && u.state !== 'needs-key' ? html`<div class="banner error mt"><div class="grow">${u.error}</div></div>` : ''}
+      ${u.state === 'needs-key' && u.deployKey ? html`<div class="mt">
+        <p style="margin-top:0">Le dépôt GitHub est privé : ajoutez cette <b>clé de déploiement</b> (lecture seule) pour autoriser ce serveur à le lire,
+          puis cliquez sur <b>Vérifier</b>.</p>
+        <ol class="muted small">
+          <li>Ouvrez <a href="${u.deployKeysUrl}" target="_blank" rel="noopener">${u.deployKeysUrl}</a></li>
+          <li>Titre : <code>RadioSMP Studio</code>, collez la clé ci-dessous, laissez « Allow write access » décoché, puis <b>Add key</b>.</li>
+        </ol>
+        <textarea rows="2" readonly>${u.deployKey}</textarea>
+        <button class="btn sm mt" data-copy="${u.deployKey}">${icon('copy')} Copier la clé</button>
+      </div>` : ''}
+      ${u.commits.length ? html`<h3 class="mt">Nouveautés</h3><div class="mt">${u.commits.map((c) => html`<div class="event">
+        <time>${c.date ? fmtDateTime(c.date).slice(0, 10) : ''}</time><code>${c.hash}</code><div>${c.subject}</div></div>`)}</div>` : ''}
+      ${u.log && ['updating', 'done', 'error'].includes(u.state) ? html`<details class="mt" ${u.state !== 'done' ? 'open' : ''}><summary class="small muted">Journal de la mise à jour</summary>
+        <div class="log mt">${u.log}</div></details>` : ''}`;
+  }
+
+  function renderUpdate() {
+    const card = $('#update-card', view);
+    if (card && update) card.innerHTML = String(updateCard(update));
+  }
+
+  async function loadUpdate() {
+    try {
+      update = await api('/update');
+    } catch {
+      // pendant une mise à jour, le dashboard redémarre : on réessaie
+      if (versionBefore) pollTimer = setTimeout(loadUpdate, 3000);
+      return;
+    }
+    renderUpdate();
+    const busy = update.pending || ['checking', 'updating'].includes(update.state);
+    clearTimeout(pollTimer);
+    if (busy || versionBefore) pollTimer = setTimeout(loadUpdate, 3000);
+    // Le dashboard redémarre pendant la mise à jour : on recharge la page une fois la nouvelle version en place
+    if (versionBefore && update.state === 'done' && update.version !== versionBefore) {
+      versionBefore = null;
+      toast('Mise à jour installée, rechargement…');
+      setTimeout(() => location.reload(), 1500);
+    }
+    if (versionBefore && update.state === 'error') versionBefore = null;
+  }
+
+  view.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-upd]');
+    if (!b) return;
+    if (b.dataset.upd === 'run') {
+      if (!await confirmDialog('Mettre à jour depuis GitHub ?', 'Le dashboard redémarre pendant la mise à jour (environ une minute). Icecast et les flux continuent de diffuser.', { confirm: 'Mettre à jour' })) return;
+      versionBefore = update?.version || 'x';
+    }
+    update = await run(b, () => api(`/update/${b.dataset.upd}`, { method: 'POST' })).catch(() => update);
+    renderUpdate();
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(loadUpdate, 2000);
+  });
 
   load();
   let lastKey = '';
-  return onLive(() => {
+  const offLive = onLive(() => {
     if (!data || !$('#proc-wrap', view)) return;
     const p = store.process || {};
     const key = [p.state, p.pid, p.lastError, store.live?.server?.start, store.live?.server?.clients].join('|');
@@ -240,4 +334,8 @@ export default function serverPage(view, { store, onLive }) {
     lastKey = key;
     $('#proc-wrap', view).innerHTML = String(processCard());
   });
+  return () => {
+    offLive();
+    clearTimeout(pollTimer);
+  };
 }

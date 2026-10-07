@@ -5,7 +5,8 @@
 # Usage, en root, depuis le dossier du projet copié dans le conteneur :
 #   bash scripts/install-lxc.sh
 #
-# Variables facultatives : APP_DIR (/opt/flux), DASHBOARD_PORT (3000), TZ_STATION (Europe/Paris)
+# Variables facultatives : APP_DIR (/opt/flux), DASHBOARD_PORT (3000), TZ_STATION (Europe/Paris),
+#                         REPO_URL (dépôt GitHub pour les mises à jour), BRANCH (main)
 set -euo pipefail
 
 APP_DIR=${APP_DIR:-/opt/flux}
@@ -13,6 +14,8 @@ APP_USER=${APP_USER:-flux}
 DASHBOARD_PORT=${DASHBOARD_PORT:-3000}
 TZ_STATION=${TZ_STATION:-Europe/Paris}
 NODE_MAJOR=${NODE_MAJOR:-22}
+REPO_URL=${REPO_URL:-git@github.com:felicienradio/radiosmp-studio.git}
+BRANCH=${BRANCH:-main}
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 step() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
@@ -31,7 +34,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 step "Paquets de base"
 apt-get update -q
-apt-get install -y -q --no-install-recommends ca-certificates curl gnupg rsync
+apt-get install -y -q --no-install-recommends ca-certificates curl gnupg rsync git openssh-client
 
 step "Icecast"
 # On refuse la configuration interactive du paquet : c'est Flux qui génère la configuration
@@ -71,6 +74,11 @@ if [ "$SRC_DIR" != "$APP_DIR" ]; then
   # data/ (réglages, statistiques) n'est jamais écrasé lors d'une mise à jour
   rsync -a --delete --exclude node_modules --exclude data --exclude .git --exclude .npm "$SRC_DIR"/ "$APP_DIR"/
 fi
+# Version installée (hash du commit) : sert à détecter les mises à jour
+if git -C "$SRC_DIR" rev-parse HEAD >/dev/null 2>&1; then
+  git -C "$SRC_DIR" rev-parse HEAD > "$APP_DIR/VERSION"
+fi
+install -d "$APP_DIR/data/update"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 cd "$APP_DIR"
 runuser -u "$APP_USER" -- env HOME="$APP_DIR" npm ci --omit=dev --no-audit --no-fund
@@ -104,9 +112,62 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
+step "Mises à jour depuis GitHub"
+install -d /etc/flux
+if git -C "$SRC_DIR" rev-parse HEAD >/dev/null 2>&1; then REPO_DIR="$SRC_DIR"; else REPO_DIR=/opt/flux-src; fi
+cat > /etc/flux/update.env <<EOF
+APP_DIR=${APP_DIR}
+APP_USER=${APP_USER}
+REPO_DIR=${REPO_DIR}
+REPO_URL=${REPO_URL}
+BRANCH=${BRANCH}
+EOF
+# Le dashboard (utilisateur flux) dépose une demande ; systemd lance alors la mise à jour en root
+cat > /etc/systemd/system/flux-update.path <<EOF
+[Unit]
+Description=Demandes de mise à jour du dashboard Flux
+
+[Path]
+PathExists=${APP_DIR}/data/update/request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/flux-update.service <<EOF
+[Unit]
+Description=Mise à jour de Flux depuis GitHub
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${APP_DIR}/scripts/update.sh run
+EOF
+cat > /etc/systemd/system/flux-update-check.service <<EOF
+[Unit]
+Description=Vérification des mises à jour de Flux
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${APP_DIR}/scripts/update.sh check
+EOF
+cat > /etc/systemd/system/flux-update-check.timer <<EOF
+[Unit]
+Description=Vérification des mises à jour de Flux toutes les 6 heures
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
-systemctl enable flux >/dev/null
+systemctl enable flux flux-update.path flux-update-check.timer >/dev/null 2>&1
+systemctl start flux-update.path flux-update-check.timer
 systemctl restart flux
+# Première vérification (crée aussi la clé de déploiement affichée dans le dashboard)
+[ -n "${FLUX_UPDATING:-}" ] || systemctl start --no-block flux-update-check.service
 
 sleep 3
 if systemctl is-active --quiet flux; then
@@ -116,7 +177,7 @@ if systemctl is-active --quiet flux; then
   echo
   echo "  Ouvrez le dashboard pour choisir votre mot de passe."
   echo "  Journaux : journalctl -u flux -f"
-  echo "  Mise à jour : copiez la nouvelle version du projet puis relancez ce script."
+  echo "  Mises à jour : page Serveur du dashboard (ou : bash ${APP_DIR}/scripts/update.sh update)"
 else
   echo "Le service ne démarre pas, voici les derniers messages :" >&2
   journalctl -u flux -n 40 --no-pager >&2

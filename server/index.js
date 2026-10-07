@@ -11,6 +11,8 @@ import { Collector } from './collector.js';
 import * as stats from './stats.js';
 import { initGeo, geoStatus, downloadGeo, lookup } from './geo.js';
 import { authRoutes, requireAuth, changePassword } from './auth.js';
+import { relayStream, playlist, relayCount } from './streamproxy.js';
+import { updateStatus, requestUpdate } from './update.js';
 
 const settings = loadSettings();
 const ice = () => getSettings().icecast;
@@ -26,7 +28,8 @@ if (filled) console.log(`${filled} sessions complétées (type d'appareil)`);
 
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', 'loopback');
+// Reverse proxy (Caddy, Nginx…) sur la machine ou le réseau local : on lit l'IP réelle des visiteurs
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -56,8 +59,8 @@ app.use('/api', requireAuth);
 const clients = new Set();
 function links() {
   const i = ice();
-  const publicBase = i.managed ? `http://${i.hostname}:${i.port}` : i.apiUrl.replace(/\/+$/, '');
-  return { publicBase, managed: i.managed, port: i.port };
+  const publicBase = i.publicUrl || (i.managed ? `http://${i.hostname}:${i.port}` : i.apiUrl.replace(/\/+$/, ''));
+  return { publicBase, managed: i.managed, port: i.port, relay: i.managed };
 }
 app.get('/api/live', (req, res) => res.json({ ...collector.live, history: collector.history, process: proc.status(), links: links() }));
 app.get('/api/stream', (req, res) => {
@@ -202,7 +205,7 @@ app.post('/api/mounts/fallback', wrap(async (req) => {
 
 function connectionInfo() {
   const i = ice();
-  return { host: i.hostname, port: i.port, sourceUser: 'source', sourcePassword: i.sourcePassword, managed: i.managed, apiUrl: i.apiUrl };
+  return { host: i.hostname, port: i.port, sourceUser: 'source', sourcePassword: i.sourcePassword, managed: i.managed, apiUrl: i.apiUrl, publicUrl: i.publicUrl || '' };
 }
 
 // ---------- Serveur Icecast ----------
@@ -214,7 +217,7 @@ function serverView() {
     live: { online: collector.live.online, error: collector.live.error, server: collector.live.server },
     settings: {
       managed: i.managed, binary: i.binary, autoStart: i.autoStart, autoRestart: i.autoRestart, apiUrl: i.apiUrl,
-      hostname: i.hostname, port: i.port, location: i.location, adminEmail: i.adminEmail,
+      hostname: i.hostname, port: i.port, location: i.location, adminEmail: i.adminEmail, publicUrl: i.publicUrl || '',
       adminUser: i.adminUser, adminPassword: i.adminPassword, sourcePassword: i.sourcePassword, relayPassword: i.relayPassword,
       limits: i.limits,
     },
@@ -224,6 +227,7 @@ function serverView() {
     platform: process.platform,
     dashboard: { host: getSettings().dashboard.host, port: getSettings().dashboard.port },
     geo: geoStatus(),
+    relayListeners: relayCount(),
     icecastAdminUrl: `http://${i.managed ? '127.0.0.1:' + i.port : i.apiUrl.replace(/^https?:\/\//, '')}/admin/`,
   };
 }
@@ -255,6 +259,11 @@ app.put('/api/server/settings', wrap((req) => {
     if ('autoRestart' in b) i.autoRestart = !!b.autoRestart;
     if ('apiUrl' in b) i.apiUrl = str(b.apiUrl, 300);
     if ('hostname' in b) i.hostname = str(b.hostname) || 'localhost';
+    if ('publicUrl' in b) {
+      const u = str(b.publicUrl, 300).replace(/\/+$/, '');
+      if (u && !/^https?:\/\/[^\s/]+(\/[^\s]*)?$/i.test(u)) throw fail('Adresse publique des flux invalide (ex. https://icecast.radiosmp.fr)');
+      i.publicUrl = u;
+    }
     if ('port' in b) i.port = int(b.port, 1, 65535);
     if ('location' in b) i.location = str(b.location);
     if ('adminEmail' in b) i.adminEmail = str(b.adminEmail);
@@ -327,7 +336,39 @@ app.post('/api/geo/download', wrap(async (req) => {
 
 app.post('/api/dashboard/password', changePassword);
 
+app.get('/api/update', wrap(() => updateStatus()));
+app.post('/api/update/check', wrap(() => { requestUpdate('check'); return updateStatus(); }));
+app.post('/api/update/run', wrap(() => {
+  requestUpdate('update');
+  logEvent('info', 'config', 'Mise à jour depuis GitHub lancée');
+  return updateStatus();
+}));
+
 // ---------- Interface ----------
+
+// ---------- Flux relayés ----------
+// https://<domaine du dashboard>/live → Icecast, pour servir les flux en HTTPS via le reverse proxy du dashboard.
+
+function streamMounts() {
+  const names = new Map(ice().mounts.map((m) => [m.name, m.streamName]));
+  for (const m of collector.live.mounts) if (!names.has(m.mount)) names.set(m.mount, m.name);
+  return names;
+}
+
+app.use((req, res, next) => {
+  if ((req.method !== 'GET' && req.method !== 'HEAD') || req.path.startsWith('/api/')) return next();
+  let p;
+  try { p = decodeURIComponent(req.path); } catch { return next(); }
+  const mounts = streamMounts();
+  const i = ice();
+  const base = i.publicUrl || `${req.protocol}://${req.get('host')}`;
+  const m3u = p.match(/^(.+)\.m3u8?$/);
+  if (m3u && mounts.has(m3u[1])) return playlist(res, `${base}${m3u[1]}`, mounts.get(m3u[1]));
+  if (!mounts.has(p)) return next();
+  if (!i.managed) return res.redirect(302, `${i.apiUrl.replace(/\/+$/, '')}${p}`);
+  const port = (proc.state === 'running' && proc.applied?.port) || i.port;
+  relayStream(req, res, { port, mount: p });
+});
 
 app.use('/vendor/chart.js', express.static(path.join(ROOT, 'node_modules/chart.js/dist')));
 app.use('/vendor/leaflet', express.static(path.join(ROOT, 'node_modules/leaflet/dist')));

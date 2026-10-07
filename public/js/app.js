@@ -153,6 +153,10 @@ function renderChrome() {
       <a class="btn" href="#/serveur">${icon('server')} Page serveur</a></div>`);
   } else if (live && !live.online && live.error) {
     setHtml(banner, html`<div class="banner error"><div class="grow"><b>Icecast ne répond pas.</b> <span class="muted">${live.error}</span></div></div>`);
+  } else if (store.update?.state === 'available' && !location.hash.startsWith('#/serveur')) {
+    setHtml(banner, html`<div class="banner" style="background:var(--accent-soft);border-color:color-mix(in srgb, var(--accent) 40%, transparent)">
+      <div class="grow"><b>Nouvelle version disponible.</b> <span class="muted">${store.update.commits[0]?.subject || ''}</span></div>
+      <a class="btn primary" href="#/serveur">${icon('download')} Voir la mise à jour</a></div>`);
   } else {
     setHtml(banner, '');
   }
@@ -228,7 +232,8 @@ async function start() {
     Object.assign(links, live.links || {});
   } catch {}
   connectStream();
-  window.addEventListener('hashchange', route);
+  api('/update').then((u) => { store.update = u; renderChrome(); }).catch(() => {});
+  window.addEventListener('hashchange', () => { route(); renderChrome(); });
   route();
   renderChrome();
 }

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { db, tx, logEvent } from './db.js';
 import { parseUserAgent } from './useragent.js';
 import { lookup } from './geo.js';
+import { resolveListener } from './streamproxy.js';
 
 const MINUTE = 60_000;
 const HISTORY_MS = 60 * MINUTE;
@@ -239,7 +240,10 @@ export class Collector extends EventEmitter {
       return out;
     }
     const seen = new Set();
-    for (const l of list) {
+    for (const raw of list) {
+      // Connexions relayées par le dashboard (HTTPS) : on retrouve l'IP et le lecteur réels
+      const real = resolveListener(raw.ip, raw.userAgent);
+      const l = { ...raw, ip: real.ip, userAgent: real.ua };
       const key = `${instance}|${mount}|${l.id}`;
       seen.add(key);
       let s = this.sessions.get(key);

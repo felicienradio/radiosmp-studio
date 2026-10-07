@@ -169,29 +169,95 @@ EOF
 3. Le dashboard (port 3000) ne doit **pas** être ouvert directement sur Internet. Pour y accéder de l'extérieur,
    passe par un reverse proxy en HTTPS (Nginx Proxy Manager, Caddy, Traefik) ou un VPN (WireGuard, Tailscale).
 
-Exemple Caddy (sur la machine qui fait reverse proxy) :
+### Flux en HTTPS
+
+Le dashboard **relaie lui-même les flux** : derrière ton reverse proxy HTTPS, `https://ton-domaine/live` donne
+directement le flux, sans configurer de certificat dans Icecast. Les statistiques gardent l'IP réelle de chaque auditeur.
+
+1. Fais pointer ton domaine vers le dashboard (port 3000). Exemple Caddy :
 
 ```
-studio.radiosmp.fr {
-    reverse_proxy 192.168.100.50:3000
-}
-stream.radiosmp.fr {
-    reverse_proxy 192.168.100.50:8000
+icecast.radiosmp.fr {
+    reverse_proxy 192.168.100.50:3000 {
+        flush_interval -1
+    }
 }
 ```
+
+`flush_interval -1` envoie l'audio sans le mettre en tampon (Caddy le fait déjà pour les flux, mais c'est plus sûr).
+Avec Nginx : `proxy_buffering off;` dans le bloc `location`.
+
+2. Dashboard → **Serveur** → **Adresse publique des flux (HTTPS)** : `https://icecast.radiosmp.fr` → **Enregistrer**.
+
+Les liens à partager deviennent alors :
+- flux : `https://icecast.radiosmp.fr/live`
+- playlist : `https://icecast.radiosmp.fr/live.m3u`
+- dashboard : `https://icecast.radiosmp.fr/` (avec ton mot de passe)
+
+Le port Icecast (8000, ou 8600 chez toi) reste joignable en HTTP pour les anciens lecteurs et pour les animateurs (encodeurs).
+
+### Démarrage rapide du son
+
+À la connexion, Icecast envoie d'un coup quelques secondes d'audio (« burst ») pour que le lecteur démarre aussitôt.
+Le réglage est de 192 Ko (environ 5 s à 320 kbps, 12 s à 128 kbps) : **Serveur** → **Limites** → **Burst**.
 
 ---
 
 ## Mettre à jour
 
+### Depuis le dashboard (recommandé)
+
+**Serveur** → **Mises à jour** → **Vérifier**, puis **Mettre à jour**. Le dashboard télécharge la dernière version
+sur GitHub, l'installe et redémarre (environ une minute). Icecast et les flux continuent de diffuser.
+Une vérification automatique a lieu toutes les 6 heures ; un bandeau s'affiche quand une nouvelle version est disponible.
+
+**La première fois**, le dépôt étant privé, le dashboard affiche une **clé de déploiement** : copie-la et ajoute-la sur
+GitHub (le lien est donné dans le dashboard : dépôt → *Settings* → *Deploy keys* → *Add deploy key*, sans cocher
+*Allow write access*), puis clique sur **Vérifier**.
+
+Depuis ton PC Windows, tu peux aussi ajouter la clé avec GitHub CLI :
+
+```bash
+gh repo deploy-key add cle.pub --repo felicienradio/radiosmp-studio --title "RadioSMP Studio"
+```
+
+(après avoir collé la clé dans un fichier `cle.pub`)
+
+### En ligne de commande
+
 **[Conteneur]**
 
 ```bash
-cd /root/radiosmp-studio && git pull && bash scripts/install-lxc.sh
+bash /opt/flux/scripts/update.sh update
 ```
 
-Les réglages, mots de passe et statistiques (`/opt/flux/data`) sont conservés. Icecast continue de diffuser
-pendant la mise à jour du dashboard.
+Vérifier seulement : `bash /opt/flux/scripts/update.sh check`. Journal : `cat /opt/flux/data/update/update.log`.
+
+### Passer à la version avec mises à jour automatiques (installation faite avant)
+
+Si ton dashboard a été installé avant l'arrivée des mises à jour par GitHub, fais une dernière mise à jour à la main.
+Sur ton PC, dans le dossier du projet :
+
+```bash
+git pull
+```
+```bash
+git archive -o flux.tar.gz HEAD
+```
+```bash
+scp flux.tar.gz root@IP-DU-CONTENEUR:/root/
+```
+
+**[Conteneur]**
+
+```bash
+rm -rf /root/radiosmp-studio && mkdir -p /root/radiosmp-studio && tar -xzf /root/flux.tar.gz -C /root/radiosmp-studio && bash /root/radiosmp-studio/scripts/install-lxc.sh
+```
+
+(Pas de SSH vers le conteneur ? Envoie l'archive sur l'hôte Proxmox puis **[Proxmox]** `pct push 150 /root/flux.tar.gz /root/flux.tar.gz`.)
+
+Les réglages et statistiques sont conservés. Ensuite, ajoute la clé de déploiement comme expliqué plus haut :
+les mises à jour suivantes se font depuis le dashboard.
 
 ---
 
