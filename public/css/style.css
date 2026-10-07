@@ -478,3 +478,9 @@ legend svg { width: 13px; height: 13px; vertical-align: -1px; }
   :root:not([data-theme="dark"]) .report .logo-on-dark { display: none; }
   :root:not([data-theme="dark"]) .report .logo-on-light { display: block; }
 }
+
+/* Icônes dans le texte */
+p svg, .small svg, .hint svg, td svg:not(.btn svg) { width: 14px; height: 14px; vertical-align: -2px; }
+.play-btn svg { width: 16px !important; height: 16px !important; vertical-align: 0; }
+.drop-icon { color: var(--accent); display: grid; place-items: center; }
+.drop-icon svg { width: 40px; height: 40px; }

@@ -10,6 +10,9 @@ import journal from './pages/journal.js';
 import server from './pages/server.js';
 import report from './pages/report.js';
 import brandingPage from './pages/branding.js';
+import autodjPage from './pages/autodj.js';
+import playlistsPage from './pages/playlists.js';
+import libraryPage from './pages/library.js';
 
 const PAGES = [
   { path: '', label: 'Tableau de bord', icon: 'dashboard', page: dashboard },
@@ -17,6 +20,9 @@ const PAGES = [
   { path: 'auditeurs', label: 'Auditeurs', icon: 'users', page: listeners, count: true },
   { path: 'stats', label: 'Statistiques', icon: 'chart', page: statsPage },
   { path: 'rapport', label: 'Rapport d\'audience', icon: 'file', page: report },
+  { path: 'autodj', label: 'AutoDJ', icon: 'disc', page: autodjPage, sep: true },
+  { path: 'playlists', label: 'Playlists', icon: 'queue', page: playlistsPage },
+  { path: 'bibliotheque', label: 'Bibliothèque', icon: 'music', page: libraryPage },
   { path: 'titres', label: 'Titres diffusés', icon: 'music', page: tracks, sep: true },
   { path: 'journal', label: 'Journal', icon: 'list', page: journal },
   { path: 'serveur', label: 'Serveur', icon: 'server', page: server },
@@ -25,7 +31,7 @@ const PAGES = [
 
 // ---------- État temps réel ----------
 
-export const store = { live: null, history: [], process: null, branding: { name: 'RadioSMP', slogan: '' } };
+export const store = { live: null, history: [], process: null, autodj: null, branding: { name: 'RadioSMP', slogan: '' } };
 const subscribers = new Set();
 export function onLive(fn) {
   subscribers.add(fn);
@@ -50,6 +56,10 @@ function connectStream() {
       const cutoff = Date.now() - 3600_000;
       while (store.history.length && store.history[0].ts < cutoff) store.history.shift();
     }
+    emit();
+  });
+  es.addEventListener('autodj', (e) => {
+    store.autodj = JSON.parse(e.data);
     emit();
   });
   es.addEventListener('process', (e) => {

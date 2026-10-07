@@ -9,6 +9,10 @@
 | **Auditeurs** | Qui écoute en ce moment : ville, appareil, lecteur, durée ; déconnecter un auditeur ; déplacer tous les auditeurs d'un flux vers un autre |
 | **Statistiques** | Toutes les stats sur la période choisie (1 h à 1 an, ou dates précises), par flux ou tous flux confondus |
 | **Rapport d'audience** | Le rapport complet, mis en page, à exporter en PDF |
+| **AutoDJ** | Diffusion automatique 24 h/24 : titre en cours, à suivre, passer un titre, réglages, grille horaire |
+| **Playlists** | Créer des playlists de musique ou de jingles, en ordre ou en aléatoire |
+| **Bibliothèque** | Envoyer vos musiques (glisser-déposer), les écouter, les ranger dans des playlists |
+| **Personnalisation** | Nom, logos, couleurs, police et thème du dashboard |
 | **Titres diffusés** | Ce qui passe à l'antenne, l'historique des titres et les plus diffusés, avec les auditeurs gagnés ou perdus pendant chaque titre |
 | **Journal** | Connexions et coupures des sources, pannes, changements de configuration, logs d'Icecast |
 | **Serveur** | Démarrer / arrêter Icecast, réglages (nom d'hôte, port, mots de passe, limites, fuseau horaire), géolocalisation, mot de passe du dashboard |
@@ -51,6 +55,35 @@ Dans *Stream*, choisis MP3 ou AAC, 128 ou 192 kbps. Pour que le titre s'affiche,
 ### Exemple : Mixxx
 
 *Préférences* → *Diffusion en direct* : Type **Icecast 2**, hôte, port `8000`, point de montage, login `source`, mot de passe du flux.
+
+## L'AutoDJ (diffusion automatique)
+
+1. **Bibliothèque** : glisse tes fichiers (MP3, AAC/M4A, OGG, Opus, FLAC, WAV) dans la zone d'envoi.
+   Titre et artiste sont lus dans les tags du fichier, sinon dans son nom (« Artiste - Titre.mp3 »). Modifiables ensuite (✎).
+2. **Playlists** : crée une playlist « Musique » (ex. *Hits*), choisis *Aléatoire* ou *Dans l'ordre*, puis **Ajouter des titres**.
+   Pour les jingles, crée une playlist de type « Jingles ».
+3. **AutoDJ** :
+   - **Configurer** (bandeau du haut), puis **Appliquer maintenant** : crée le flux `/autodj` et en fait le **secours de `/live`**.
+     Les auditeurs de `/live` entendent l'AutoDJ ; quand un animateur se connecte sur `/live`, il prend l'antenne
+     automatiquement, et l'AutoDJ reprend dès qu'il coupe ;
+   - **Réglages** : playlist par défaut, playlist de jingles et fréquence (« un jingle tous les N titres »), format et débit ;
+   - **Démarrer l'AutoDJ**. Il redémarre tout seul avec le dashboard.
+4. **Grille horaire** : ajoute des créneaux (jours + heures → playlist), par exemple *Hits* du lundi au vendredi de 7h à 10h,
+   *Chill* le week-end. En dehors des créneaux, la playlist par défaut tourne.
+
+Pendant la diffusion :
+- **Passer** saute au titre suivant ;
+- dans la Bibliothèque, le bouton « jouer ensuite » place un titre en tête de la file (*Demande*) ;
+- les titres joués apparaissent dans **Titres diffusés** et dans les statistiques comme ceux d'un animateur.
+
+Conseil : règle l'AutoDJ dans le **même format et le même débit** que tes animateurs (ex. MP3 320 kbps) pour que le passage
+de l'un à l'autre soit propre pour les auditeurs.
+
+## Le buffer de démarrage
+
+Dans **Flux** → **Modifier**, chaque point de montage a un **Buffer de démarrage** :
+- **Faible latence** (buffer 0) : les auditeurs sont au plus près du direct (jeux, appels à l'antenne) ; le lecteur met 1 à 3 s à démarrer ;
+- **Démarrage instantané** : le son part dès le clic sur Play, avec quelques secondes de décalage sur le direct.
 
 ## Les statistiques
 
