@@ -30,39 +30,38 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - Auditeurs en direct (ville, appareil, lecteur), déconnexion, déplacement vers un autre flux
 - Changement du titre en cours, coupure d'une source, journal des événements et logs Icecast
 
-## Installation dans un conteneur LXC (Debian 12 / 13)
+## Installation dans un conteneur LXC Proxmox (Debian 12 / 13)
 
-1. Créez un conteneur Debian 12 ou 13 (1 cœur, 512 Mo de RAM et 4 Go de disque suffisent pour démarrer).
-2. Copiez le projet dans le conteneur. Depuis ce PC, dans le dossier du projet :
-   ```bash
-   git archive -o flux.tar.gz HEAD
-   ```
-   ```bash
-   scp flux.tar.gz root@IP-DU-CONTENEUR:/root/
-   ```
-   Puis dans le conteneur :
-   ```bash
-   mkdir -p /root/flux && tar -xzf /root/flux.tar.gz -C /root/flux
-   ```
-3. Lancez l'installation, en root :
-   ```bash
-   bash /root/flux/scripts/install-lxc.sh
-   ```
-4. Ouvrez `http://IP-DU-CONTENEUR:3000` et choisissez le mot de passe du dashboard.
+📘 **Guide complet pas à pas : [docs/INSTALLATION-PROXMOX.md](docs/INSTALLATION-PROXMOX.md)**
 
-Le script installe Icecast (paquet Debian, version 2.4.4) et Node.js 22, crée l'utilisateur `flux`
-(Icecast refuse de tourner en root), copie l'application dans `/opt/flux` et crée le service `flux`
-qui démarre avec le conteneur. Le service Icecast de Debian est désactivé : c'est le dashboard qui lance Icecast
-avec sa propre configuration.
+📗 **Guide d'utilisation : [docs/UTILISATION.md](docs/UTILISATION.md)**
 
-- Journaux : `journalctl -u flux -f`
-- Redémarrer le dashboard : `systemctl restart flux` (Icecast continue de diffuser pendant ce temps)
-- **Mise à jour** : copiez la nouvelle version puis relancez le script ; les réglages et statistiques (`/opt/flux/data`) sont conservés.
-- Options : `DASHBOARD_PORT=8080 TZ_STATION=Europe/Paris bash scripts/install-lxc.sh`
+En résumé, **[Proxmox]** créer le conteneur (script fourni) :
 
-Pour que la radio soit écoutée depuis Internet, redirigez le port 8000 vers l'IP du conteneur sur votre box
-et mettez votre nom de domaine dans **Nom d'hôte public** (page Serveur). Pour ouvrir le dashboard depuis Internet,
-passez par un reverse proxy en HTTPS (Nginx Proxy Manager, Caddy…).
+```bash
+IP=192.168.100.50/24 GW=192.168.100.1 bash proxmox-create-ct.sh
+```
+
+puis **[Conteneur]** récupérer le projet et l'installer :
+
+```bash
+git clone git@github.com:felicienradio/radiosmp-studio.git /root/radiosmp-studio
+```
+```bash
+bash /root/radiosmp-studio/scripts/install-lxc.sh
+```
+
+Le dashboard est alors sur `http://IP-DU-CONTENEUR:3000` et Icecast sur le port 8000.
+Le script installe Icecast (paquet Debian 2.4.4), Node.js 22, l'utilisateur `flux` (Icecast refuse de tourner en root)
+et le service `flux` lancé au démarrage du conteneur.
+
+**Mise à jour** :
+
+```bash
+cd /root/radiosmp-studio && git pull && bash scripts/install-lxc.sh
+```
+
+Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser pendant la mise à jour.
 
 ## Installation sous Windows
 
@@ -109,7 +108,8 @@ server/
   geo.js            géolocalisation (DB-IP Lite)
   icecast/          pilotage du processus, génération de la config (2.4 et 2.5), client de l'API admin
 public/             interface (HTML/CSS/JS sans étape de build, Chart.js, Leaflet)
-scripts/            installation LXC et Windows, diffusion de test
+scripts/            création du conteneur Proxmox, installation LXC et Windows, diffusion de test
+docs/               guides d'installation et d'utilisation
 data/               créé au premier lancement (non versionné)
 ```
 
