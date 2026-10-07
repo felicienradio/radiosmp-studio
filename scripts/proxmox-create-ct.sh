@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # À lancer sur l'HÔTE Proxmox (shell root) : crée le conteneur LXC Debian de RadioSMP Studio.
 #
-# Exemples :
-#   bash proxmox-create-ct.sh                                   # DHCP, valeurs par défaut
+# Exemples (le conteneur est créé puis RadioSMP Studio y est installé depuis GitHub) :
+#   bash <(curl -fsSL https://raw.githubusercontent.com/felicienradio/radiosmp-studio/main/scripts/proxmox-create-ct.sh)
 #   IP=192.168.100.50/24 GW=192.168.100.1 bash proxmox-create-ct.sh
-#   ARCHIVE=/root/flux.tar.gz bash proxmox-create-ct.sh         # crée ET installe le dashboard
+#   NO_INSTALL=1 bash proxmox-create-ct.sh                      # crée seulement le conteneur
+#   ARCHIVE=/root/flux.tar.gz bash proxmox-create-ct.sh         # installe depuis une archive locale
 #
 # Variables : CTID, CT_HOSTNAME, STORAGE, TEMPLATE_STORAGE, BRIDGE, IP, GW, DISK (Go), CORES,
-#             MEMORY (Mo), DEBIAN (12 ou 13), SSH_KEY (fichier de clé publique), ARCHIVE
+#             MEMORY (Mo), DEBIAN (12 ou 13), SSH_KEY (fichier de clé publique), ARCHIVE, NO_INSTALL
 set -euo pipefail
 
 CTID=${CTID:-$(pvesh get /cluster/nextid)}
@@ -23,6 +24,7 @@ MEMORY=${MEMORY:-1024}
 DEBIAN=${DEBIAN:-13}
 SSH_KEY=${SSH_KEY:-}
 ARCHIVE=${ARCHIVE:-}
+INSTALL_URL=${INSTALL_URL:-https://raw.githubusercontent.com/felicienradio/radiosmp-studio/main/scripts/install-lxc.sh}
 
 step() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
 
@@ -72,14 +74,17 @@ if [ -n "$ARCHIVE" ]; then
   step "Installation de RadioSMP Studio depuis ${ARCHIVE}"
   pct push "$CTID" "$ARCHIVE" /root/flux.tar.gz
   pct exec "$CTID" -- bash -c "mkdir -p /root/radiosmp-studio && tar -xzf /root/flux.tar.gz -C /root/radiosmp-studio && bash /root/radiosmp-studio/scripts/install-lxc.sh"
+elif [ -z "${NO_INSTALL:-}" ]; then
+  step "Installation de RadioSMP Studio depuis GitHub"
+  pct exec "$CTID" -- bash -c "curl -fsSL ${INSTALL_URL} | bash"
 fi
 
 step "Conteneur prêt"
 echo "  Numéro : ${CTID}"
 echo "  Adresse IP : ${CT_IP:-inconnue (voir pct exec ${CTID} -- hostname -I)}"
 echo "  Entrer dans le conteneur : pct enter ${CTID}"
-if [ -n "$ARCHIVE" ]; then
-  echo "  Dashboard : http://${CT_IP:-IP}:3000"
+if [ -n "${NO_INSTALL:-}" ] && [ -z "$ARCHIVE" ]; then
+  echo "  Installation : pct enter ${CTID}, puis curl -fsSL ${INSTALL_URL} | bash"
 else
-  echo "  Étape suivante : suivez docs/INSTALLATION-PROXMOX.md (étape 3) dans le conteneur."
+  echo "  Dashboard : http://${CT_IP:-IP}:3000"
 fi

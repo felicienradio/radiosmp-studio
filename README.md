@@ -38,19 +38,16 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 
 📗 **Guide d'utilisation : [docs/UTILISATION.md](docs/UTILISATION.md)**
 
-En résumé, **[Proxmox]** créer le conteneur (script fourni) :
+**[Proxmox]** Créer le conteneur et tout installer en une commande :
 
 ```bash
-IP=192.168.100.50/24 GW=192.168.100.1 bash proxmox-create-ct.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/felicienradio/radiosmp-studio/main/scripts/proxmox-create-ct.sh)
 ```
 
-puis **[Conteneur]** récupérer le projet et l'installer :
+**[Conteneur existant]** Installer ou mettre à jour (Debian 12 / 13, en root) :
 
 ```bash
-git clone git@github.com:felicienradio/radiosmp-studio.git /root/radiosmp-studio
-```
-```bash
-bash /root/radiosmp-studio/scripts/install-lxc.sh
+curl -fsSL https://raw.githubusercontent.com/felicienradio/radiosmp-studio/main/scripts/install-lxc.sh | bash
 ```
 
 Le dashboard est alors sur `http://IP-DU-CONTENEUR:3000` et Icecast sur le port 8000.
@@ -59,7 +56,7 @@ et le service `flux` lancé au démarrage du conteneur.
 
 **Mises à jour** : en un clic depuis le dashboard (**Serveur** → **Mises à jour**), avec vérification automatique
 toutes les 6 heures. Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser.
-Détails et première configuration : [guide, section « Mettre à jour »](docs/INSTALLATION-PROXMOX.md#mettre-à-jour).
+Détails : [guide, section « Mettre à jour »](docs/INSTALLATION-PROXMOX.md#mettre-à-jour).
 
 **Flux en HTTPS** : le dashboard relaie les flux. Derrière ton reverse proxy HTTPS, `https://ton-domaine/live` sert
 directement le flux, avec l'IP réelle des auditeurs dans les stats

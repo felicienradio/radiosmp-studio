@@ -2,7 +2,9 @@
 # Installe (ou met à jour) Flux, le dashboard Icecast de RadioSMP, dans un conteneur LXC
 # Debian 12 / 13 (ou Ubuntu 22.04 / 24.04).
 #
-# Usage, en root, depuis le dossier du projet copié dans le conteneur :
+# Usage, en root, dans le conteneur :
+#   curl -fsSL https://raw.githubusercontent.com/felicienradio/radiosmp-studio/main/scripts/install-lxc.sh | bash
+# ou depuis une copie du projet :
 #   bash scripts/install-lxc.sh
 #
 # Variables facultatives : APP_DIR (/opt/flux), DASHBOARD_PORT (3000), TZ_STATION (Europe/Paris),
@@ -14,9 +16,9 @@ APP_USER=${APP_USER:-flux}
 DASHBOARD_PORT=${DASHBOARD_PORT:-3000}
 TZ_STATION=${TZ_STATION:-Europe/Paris}
 NODE_MAJOR=${NODE_MAJOR:-22}
-REPO_URL=${REPO_URL:-git@github.com:felicienradio/radiosmp-studio.git}
+REPO_URL=${REPO_URL:-https://github.com/felicienradio/radiosmp-studio.git}
 BRANCH=${BRANCH:-main}
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd || pwd)"
 
 step() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
 
@@ -24,6 +26,23 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "Ce script doit être lancé en root." >&2
   exit 1
 fi
+
+# Lancé via « curl … | bash » : on récupère d'abord le projet depuis GitHub
+if [ ! -f "$SRC_DIR/server/index.js" ]; then
+  step "Téléchargement du projet depuis GitHub"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -q
+  apt-get install -y -q --no-install-recommends git ca-certificates
+  if [ -d /opt/flux-src/.git ]; then
+    git -C /opt/flux-src fetch --quiet origin "$BRANCH"
+    git -C /opt/flux-src reset --quiet --hard "origin/$BRANCH"
+  else
+    rm -rf /opt/flux-src
+    git clone --quiet --branch "$BRANCH" "$REPO_URL" /opt/flux-src
+  fi
+  exec bash /opt/flux-src/scripts/install-lxc.sh
+fi
+
 . /etc/os-release
 case "${ID:-}" in
   debian|ubuntu) ;;

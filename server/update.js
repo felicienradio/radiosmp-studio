@@ -30,7 +30,7 @@ export function currentVersion() {
 }
 
 function repoPage() {
-  let url = 'git@github.com:felicienradio/radiosmp-studio.git';
+  let url = 'https://github.com/felicienradio/radiosmp-studio.git';
   try {
     url = fs.readFileSync('/etc/flux/update.env', 'utf8').match(/^REPO_URL=(.+)$/m)?.[1] || url;
   } catch {}

@@ -13,7 +13,7 @@ main() {
   APP_DIR=${APP_DIR:-/opt/flux}
   APP_USER=${APP_USER:-flux}
   REPO_DIR=${REPO_DIR:-/opt/flux-src}
-  REPO_URL=${REPO_URL:-git@github.com:felicienradio/radiosmp-studio.git}
+  REPO_URL=${REPO_URL:-https://github.com/felicienradio/radiosmp-studio.git}
   BRANCH=${BRANCH:-main}
   KEY=${DEPLOY_KEY:-/root/.ssh/radiosmp_deploy}
   UPD="$APP_DIR/data/update"
@@ -27,10 +27,17 @@ main() {
   fi
   [ "$mode" = update ] || mode=check
 
-  ensure_key
+  # Clé de déploiement : seulement pour un dépôt privé (adresse git@github.com:…)
+  case "$REPO_URL" in
+    git@*|ssh://*) ensure_key ;;
+    *) rm -f "$UPD/deploy_key.pub" ;;
+  esac
   status state checking
   if ! ensure_repo; then
-    status state needs-key error "GitHub refuse l'accès : ajoutez la clé de déploiement au dépôt."
+    case "$REPO_URL" in
+      git@*|ssh://*) status state needs-key error "GitHub refuse l'accès : ajoutez la clé de déploiement au dépôt." ;;
+      *) status state error error "Impossible de récupérer le dépôt : $(tail -n 2 "$UPD/git.err" | tr '\n' ' ')" ;;
+    esac
     return 0
   fi
   if ! git -C "$REPO_DIR" fetch --quiet origin "$BRANCH" 2>"$UPD/git.err"; then
