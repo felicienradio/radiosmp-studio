@@ -1,5 +1,7 @@
 /* global Chart */
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+/** Couleur courante d'une variable CSS (couleurs personnalisées de la radio). */
+export const cssVar = css;
 
 function theme() {
   return {

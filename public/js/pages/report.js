@@ -61,7 +61,7 @@ export default function reportPage(view, { store, topbar }) {
     view.innerHTML = String(html`<div class="report">
       ${page(1, total, '', html`<div class="report-cover" style="margin:-34px -38px 0;padding:34px 38px;border-radius:var(--radius) var(--radius) 0 0">
           <div class="row between" style="align-items:flex-start">
-            <img class="logo" src="/img/logo.png" alt="${name}">
+            <div><img class="logo logo-on-dark" src="/branding/logo" alt="${name}"><img class="logo logo-on-light" src="/branding/logo-light" alt="${name}"></div>
             <div class="right"><div class="kpi-label">Rapport d'audience</div><div class="dim small">Généré le ${new Date().toLocaleDateString('fr-FR')}</div></div>
           </div>
           <h1>Statistiques d'écoute</h1>

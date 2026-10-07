@@ -13,6 +13,7 @@ import { initGeo, geoStatus, downloadGeo, lookup } from './geo.js';
 import { authRoutes, requireAuth, changePassword } from './auth.js';
 import { relayStream, playlist, relayCount } from './streamproxy.js';
 import { updateStatus, requestUpdate } from './update.js';
+import { brandingRoutes } from './branding.js';
 
 const settings = loadSettings();
 const ice = () => getSettings().icecast;
@@ -53,6 +54,7 @@ const fail = (message, status = 400) => Object.assign(new Error(message), { stat
 
 authRoutes(app);
 app.use('/api', requireAuth);
+brandingRoutes(app, { requireAuth, logEvent });
 
 // Adresse publique des flux : déduite automatiquement la première fois que le dashboard est ouvert
 // en HTTPS par un nom de domaine (ex. https://icecast.radiosmp.fr) → liens https://domaine/<mount>

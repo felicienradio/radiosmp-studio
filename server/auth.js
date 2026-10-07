@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getSettings, updateSettings } from './settings.js';
+import { branding } from './branding.js';
 
 const COOKIE = 'flux_session';
 const MAX_AGE = 30 * 86400_000;
@@ -62,8 +63,8 @@ function tooManyAttempts(ip) {
 
 export function authRoutes(app) {
   app.get('/api/auth/state', (req, res) => {
-    const { name, slogan } = getSettings().branding || {};
-    res.json({ needsSetup: !getSettings().dashboard.passwordHash, authed: isAuthed(req), branding: { name, slogan } });
+    const { name, slogan, theme } = branding();
+    res.json({ needsSetup: !getSettings().dashboard.passwordHash, authed: isAuthed(req), branding: { name, slogan, theme } });
   });
 
   app.post('/api/auth/setup', (req, res) => {

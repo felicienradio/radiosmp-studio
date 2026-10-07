@@ -9,6 +9,7 @@ import tracks from './pages/tracks.js';
 import journal from './pages/journal.js';
 import server from './pages/server.js';
 import report from './pages/report.js';
+import brandingPage from './pages/branding.js';
 
 const PAGES = [
   { path: '', label: 'Tableau de bord', icon: 'dashboard', page: dashboard },
@@ -19,6 +20,7 @@ const PAGES = [
   { path: 'titres', label: 'Titres diffusés', icon: 'music', page: tracks, sep: true },
   { path: 'journal', label: 'Journal', icon: 'list', page: journal },
   { path: 'serveur', label: 'Serveur', icon: 'server', page: server },
+  { path: 'personnalisation', label: 'Personnalisation', icon: 'palette', page: brandingPage },
 ];
 
 // ---------- État temps réel ----------
@@ -65,7 +67,7 @@ function layout() {
     <div class="app">
       <aside class="sidebar">
         <a class="brand" href="#/">
-          <img src="/img/logo.png" alt="${store.branding.name}">
+          <img src="/branding/logo" alt="${store.branding.name}">
           <span class="brand-sub">Studio · Icecast</span>
         </a>
         <nav class="nav">
@@ -193,7 +195,7 @@ function authScreen(needsSetup) {
   document.body.innerHTML = String(html`
     <div class="auth">
       <div class="card">
-        <img class="logo" src="/img/logo.png" alt="${store.branding.name}">
+        <img class="logo" src="/branding/logo" alt="${store.branding.name}">
         <div class="tagline">Studio · Gestion de la diffusion</div>
         ${needsSetup
           ? html`<h2>Bienvenue !</h2><p class="muted">Choisissez le mot de passe qui protégera votre dashboard.</p>`
@@ -245,6 +247,12 @@ async function boot() {
   } catch {}
   const state = await api('/auth/state');
   if (state.branding?.name) store.branding = state.branding;
+  // Thème par défaut de la radio, tant que l'utilisateur n'a pas choisi le sien
+  try {
+    if (!localStorage.getItem('flux-theme') && ['dark', 'light'].includes(state.branding?.theme)) {
+      document.documentElement.dataset.theme = state.branding.theme;
+    }
+  } catch {}
   if (state.authed) start();
   else authScreen(state.needsSetup);
 }

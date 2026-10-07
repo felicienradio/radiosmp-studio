@@ -1,6 +1,9 @@
 /* global L, topojson */
 import { html, $, fmtNum, fmtDec, fmtDuration, fmtDateTime, fmtBytes, fmtHours, trend, insight, barList, country } from '../lib.js';
-import { lineChart, doughnutChart, barChart, comboChart, stackedArea } from '../charts.js';
+import { lineChart, doughnutChart, barChart, comboChart, stackedArea, cssVar } from '../charts.js';
+
+// Couleurs des séries : couleur principale de la radio, rose, vert (variables CSS --c1, --c2, --c4)
+const C = { main: () => cssVar('--c1'), second: () => cssVar('--c2'), third: () => cssVar('--c4') };
 
 const DAY_SHORT = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 const fmtDayLabel = (t) => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -46,23 +49,23 @@ export function secondaryKpis(d) {
 
 export function dailyChart(canvas, d) {
   return comboChart(canvas, d.days.map((x) => fmtDayLabel(x.day)), [
-    { type: 'line', label: 'Auditeurs uniques', data: d.days.map((x) => x.unique), color: '#c05ef0', fill: true },
-    { type: 'line', label: 'Connexions', data: d.days.map((x) => x.connections), color: '#f472b6', dashed: true },
-    { type: 'bar', label: 'Minutes d\'écoute', data: d.days.map((x) => Math.round(x.hours * 60)), color: '#2ecc71', axis: 'y2', soft: true },
+    { type: 'line', label: 'Auditeurs uniques', data: d.days.map((x) => x.unique), color: C.main(), fill: true },
+    { type: 'line', label: 'Connexions', data: d.days.map((x) => x.connections), color: C.second(), dashed: true },
+    { type: 'bar', label: 'Minutes d\'écoute', data: d.days.map((x) => Math.round(x.hours * 60)), color: C.third(), axis: 'y2', soft: true },
   ], { y2Label: 'minutes' });
 }
 
 export function hoursChart(canvas, d) {
   return comboChart(canvas, d.hours.map((x) => `${String(x.hour).padStart(2, '0')}h`), [
-    { label: 'Auditeurs uniques', data: d.hours.map((x) => x.unique), color: '#c05ef0' },
-    { label: 'Connexions', data: d.hours.map((x) => x.connections), color: '#f472b6', soft: true },
+    { label: 'Auditeurs uniques', data: d.hours.map((x) => x.unique), color: C.main() },
+    { label: 'Connexions', data: d.hours.map((x) => x.connections), color: C.second(), soft: true },
   ]);
 }
 
 export function weekdaysChart(canvas, d) {
   return comboChart(canvas, d.weekdays.map((x) => DAY_SHORT[x.dow]), [
-    { label: 'Auditeurs uniques', data: d.weekdays.map((x) => x.unique), color: '#c05ef0' },
-    { label: 'Connexions', data: d.weekdays.map((x) => x.connections), color: '#f472b6', soft: true },
+    { label: 'Auditeurs uniques', data: d.weekdays.map((x) => x.unique), color: C.main() },
+    { label: 'Connexions', data: d.weekdays.map((x) => x.connections), color: C.second(), soft: true },
   ]);
 }
 
@@ -147,9 +150,10 @@ export async function worldMap(el, d, { light = false } = {}) {
     el.innerHTML = '<div class="empty">Carte indisponible (bibliothèques non chargées)</div>';
     return null;
   }
+  const fill = C.main();
   const colors = light
-    ? { ocean: '#f7f6fb', land: '#e4e1ec', border: '#ffffff', fill: '#9b3fd1' }
-    : { ocean: '#0c0c0f', land: '#202027', border: '#2e2e37', fill: '#c05ef0' };
+    ? { ocean: '#f7f6fb', land: '#e4e1ec', border: '#ffffff', fill }
+    : { ocean: cssVar('--bg-2') || '#0c0c0f', land: cssVar('--panel-2') || '#202027', border: '#2e2e37', fill };
   el.style.background = colors.ocean;
   const map = L.map(el, {
     scrollWheelZoom: false, zoomSnap: 0.25, minZoom: 1, maxZoom: 10,
@@ -189,9 +193,9 @@ export async function worldMap(el, d, { light = false } = {}) {
     const { flag, name } = country(c.country);
     return L.circleMarker([c.lat, c.lon], {
       radius: 3.5 + Math.sqrt(c.unique / maxCity) * 20,
-      color: light ? '#7c3aed' : '#e9b8ff',
+      color: light ? cssVar('--accent-deep') : cssVar('--accent-2'),
       weight: 1.2,
-      fillColor: light ? '#9b3fd1' : '#c05ef0',
+      fillColor: fill,
       fillOpacity: 0.65,
     }).bindTooltip(`${flag} <b>${c.city || 'Ville inconnue'}</b>, ${name}<br>${fmtNum(c.unique)} auditeur${c.unique > 1 ? 's' : ''} unique${c.unique > 1 ? 's' : ''}`,
       { className: 'map-tip', direction: 'top' }).addTo(map);
