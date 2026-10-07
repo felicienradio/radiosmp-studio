@@ -1,5 +1,6 @@
 import { api, html, icon, $, run, toast, modal, confirmDialog, formData, fmtNum, fmtDuration, fmtBytes, fmtDateTime, fmtClock } from '../lib.js';
 import { player, playIcon } from '../player.js';
+import { openCueEditor, cueSummary } from '../cue-editor.js';
 
 const ACCEPT = '.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.wav,audio/*';
 
@@ -46,6 +47,8 @@ export async function choosePlaylist(title, kind) {
 export default function libraryPage(view, { topbar }) {
   let items = [];
   let stats = { count: 0, duration: 0, size: 0 };
+  let analysing = 0;
+  let poll = null;
   let search = '';
   const selected = new Set();
   const uploads = []; // { name, progress, state, error }
@@ -79,13 +82,15 @@ export default function libraryPage(view, { topbar }) {
       <div class="row between mt">
         <span class="muted">${fmtNum(stats.count)} titres · ${fmtDuration(stats.duration, true)} · ${fmtBytes(stats.size)}</span>
         <div class="row">
+          ${analysing ? html`<span class="dim small">${icon('wave')} Points cue : ${fmtNum(analysing)} titre${analysing > 1 ? 's' : ''} en analyse…</span>` : ''}
+          <button class="btn sm" id="analyse-all" title="Recalcule les points cue automatiques (les réglages faits à la main sont conservés)">${icon('wave')} Points cue automatiques</button>
           <button class="btn sm" id="add-selection" ${selected.size ? '' : 'disabled'}>${icon('plus')} Ajouter la sélection (${selected.size}) à une playlist</button>
         </div>
       </div>
       <div class="card flush mt">
         <div class="table-wrap"><table>
           <thead><tr><th style="width:34px"><input type="checkbox" id="select-all"></th><th></th><th>Titre</th><th>Artiste</th><th>Album</th>
-            <th class="num">Durée</th><th class="num">Diffusions</th><th>Ajouté le</th><th></th></tr></thead>
+            <th class="num">Durée</th><th>Cue</th><th class="num">Diffusions</th><th>Ajouté le</th><th></th></tr></thead>
           <tbody>${items.length ? items.map((m) => html`<tr>
             <td><input type="checkbox" data-sel="${m.id}" ${selected.has(m.id) ? 'checked' : ''}></td>
             <td><button class="play-btn" style="width:30px;height:30px" data-play="/api/autodj/media/${m.id}/audio" title="Écouter">${playIcon(`/api/autodj/media/${m.id}/audio`)}</button></td>
@@ -93,15 +98,17 @@ export default function libraryPage(view, { topbar }) {
             <td class="truncate">${m.artist || '—'}</td>
             <td class="truncate dim">${m.album || ''}</td>
             <td class="num">${m.duration ? fmtClock(m.duration) : '—'}</td>
+            <td>${cueSummary(m)}</td>
             <td class="num">${fmtNum(m.plays)}</td>
             <td class="dim small nowrap">${fmtDateTime(m.added_at).slice(0, 10)}</td>
             <td class="right nowrap">
               <button class="btn sm ghost" data-next="${m.id}" title="Jouer ensuite sur l'AutoDJ">${icon('queue')}</button>
+              <button class="btn sm ghost" data-cue="${m.id}" title="Points cue (entrée, enchaînement, sortie, fondus)">${icon('wave')}</button>
               <button class="btn sm ghost" data-add="${m.id}" title="Ajouter à une playlist">${icon('plus')}</button>
               <button class="btn sm ghost" data-edit="${m.id}" title="Modifier">${icon('edit')}</button>
               <button class="btn sm ghost danger" data-del="${m.id}" title="Supprimer">${icon('trash')}</button>
             </td></tr>`)
-          : html`<tr><td colspan="9" class="empty">${search ? 'Aucun résultat' : 'La bibliothèque est vide : envoyez vos premières musiques ci-dessus.'}</td></tr>`}</tbody>
+          : html`<tr><td colspan="10" class="empty">${search ? 'Aucun résultat' : 'La bibliothèque est vide : envoyez vos premières musiques ci-dessus.'}</td></tr>`}</tbody>
         </table></div>
       </div>`);
     renderUploads();
@@ -112,7 +119,11 @@ export default function libraryPage(view, { topbar }) {
     const r = await api(`/autodj/media?q=${encodeURIComponent(search)}`);
     items = r.items;
     stats = r.stats;
+    analysing = r.analysing || 0;
     render();
+    // Analyse en cours : on rafraîchit jusqu'à la fin
+    clearTimeout(poll);
+    if (analysing) poll = setTimeout(load, 3000);
   }
 
   async function sendFiles(files) {
@@ -173,6 +184,13 @@ export default function libraryPage(view, { topbar }) {
   });
 
   view.addEventListener('click', async (e) => {
+    const cue = e.target.closest('[data-cue]');
+    if (cue && await openCueEditor(items.find((x) => x.id === Number(cue.dataset.cue)))) load();
+    if (e.target.closest('#analyse-all')) {
+      const r = await run(null, () => api('/autodj/autocue', { method: 'POST' }));
+      toast(r.queued ? `${r.queued} titre${r.queued > 1 ? 's' : ''} en cours d'analyse` : 'Tous les titres ont des points cue réglés à la main');
+      load();
+    }
     const next = e.target.closest('[data-next]');
     if (next) await run(next, () => api('/autodj/queue', { method: 'POST', body: { mediaId: Number(next.dataset.next) } }), 'Ajouté à la file d\'attente de l\'AutoDJ');
     const add = e.target.closest('[data-add]');
@@ -215,6 +233,6 @@ export default function libraryPage(view, { topbar }) {
   });
 
   load();
-  return () => clearTimeout(t);
+  return () => { clearTimeout(t); clearTimeout(poll); };
 }
 

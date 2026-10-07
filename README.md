@@ -32,6 +32,9 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - **AutoDJ** : bibliothèque musicale (glisser-déposer), playlists musique et jingles, diffusion 24 h/24 sans blanc entre
   les titres, grille horaire, un jingle tous les N titres, demandes (« jouer ensuite »), le direct prend l'antenne
   automatiquement et l'AutoDJ reprend quand l'animateur coupe
+- **Points cue** (entrée, enchaînement, sortie, fondus) détectés automatiquement et réglables à la main sur la forme
+  d'onde, pour la musique comme pour les jingles
+- Suppression des points de montage, avec ou sans leurs statistiques
 - **Personnalisation** : nom, logos, couleurs, police et thème, depuis le dashboard
 - **Buffer par flux** : « Faible latence » (buffer 0) ou « Démarrage instantané »
 - **Flux en HTTPS** relayés par le dashboard (`https://ton-domaine/live`), démarrage rapide du son (burst de 5 s à 320 kbps)

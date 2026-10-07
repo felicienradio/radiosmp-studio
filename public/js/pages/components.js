@@ -76,6 +76,7 @@ export function mountCard(m, { actions = true, access = false } = {}) {
           ? html`<button class="btn sm" data-act="edit" data-id="${m.id}">${icon('edit')} Modifier</button>`
           : html`<button class="btn sm" data-act="configure" data-name="${m.name}">${icon('settings')} Configurer</button>`}
         ${live ? html`<button class="btn sm danger" data-act="kill" data-name="${m.name}">${icon('power')} Couper</button>` : ''}
+        ${m.configured && access ? html`<button class="btn sm ghost icon danger" data-act="delete" data-id="${m.id}" title="Supprimer ce point de montage" style="margin-left:auto">${icon('trash')}</button>` : ''}
       </div>` : ''}
     </div>`;
 }

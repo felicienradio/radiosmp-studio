@@ -1,4 +1,4 @@
-import { api, html, icon, $, run, modal, confirmDialog, promptDialog, formData, copyable, secret, fmtNum } from '../lib.js';
+import { api, html, icon, $, run, modal, confirmDialog, promptDialog, formData, copyable, secret, fmtNum, fmtDateTime } from '../lib.js';
 import { mountCard } from './components.js';
 
 const EMPTY = {
@@ -90,12 +90,38 @@ export async function openMountEditor(id, prefillName) {
       resolve(true);
     });
     dlg.querySelector('[data-del]')?.addEventListener('click', async () => {
-      if (!await confirmDialog('Supprimer ce point de montage ?', `Les réglages de ${m.name} seront supprimés. Les statistiques déjà enregistrées sont conservées.`, { confirm: 'Supprimer', danger: true })) return;
-      await run(null, () => api(`/mounts/${id}`, { method: 'DELETE' }), 'Point de montage supprimé');
+      if (!await deleteMount(m)) return;
       close();
       resolve(true);
     });
     dlg.addEventListener('close', () => resolve(false));
+  });
+}
+
+/** Suppression d'un point de montage, avec ou sans ses statistiques. Renvoie true si supprimé. */
+export function deleteMount(m) {
+  return new Promise((resolve) => {
+    let done = false;
+    const { dlg, close } = modal({
+      title: `Supprimer ${m.name} ?`,
+      body: html`<div class="stack">
+        <p style="margin:0">Le point de montage <code>${m.name}</code>${m.streamName ? html` (${m.streamName})` : ''} et son mot de passe de diffusion seront supprimés.
+          ${m.live ? html`<b>Un encodeur est connecté dessus : il sera déconnecté.</b>` : ''}
+          Les flux qui l'utilisaient comme secours n'en auront plus.</p>
+        <label class="check"><input type="checkbox" id="purge"> Effacer aussi ses statistiques (auditeurs, courbes, titres diffusés)</label>
+        <p class="dim small" style="margin:0">Sans cette case, l'historique reste visible dans les statistiques et le rapport.
+          Icecast prend la suppression en compte au prochain « Appliquer maintenant ».</p></div>`,
+      footer: html`<button class="btn" data-close>Annuler</button><button class="btn danger" id="del-ok">${icon('trash')} Supprimer</button>`,
+    });
+    dlg.querySelector('#del-ok').addEventListener('click', async (e) => {
+      const purge = dlg.querySelector('#purge').checked;
+      const r = await run(e.currentTarget, () => api(`/mounts/${m.id}${purge ? '?stats=1' : ''}`, { method: 'DELETE' }),
+        purge ? 'Point de montage et statistiques supprimés' : 'Point de montage supprimé').catch(() => null);
+      if (r === null) return;
+      done = true;
+      close();
+    });
+    dlg.addEventListener('close', () => resolve(done));
   });
 }
 
@@ -151,6 +177,11 @@ export function bindMountActions(root, reload) {
     const { act, name, id } = b.dataset;
     if (act === 'details') openConnection(name);
     if (act === 'edit' && await openMountEditor(id)) reload();
+    if (act === 'delete') {
+      const { mounts } = await api('/mounts');
+      const m = mounts.find((x) => x.id === id);
+      if (m && await deleteMount(m)) reload();
+    }
     if (act === 'configure' && await openMountEditor(null, name)) reload();
     if (act === 'metadata') {
       const card = b.closest('[data-mount-card]');
@@ -190,7 +221,14 @@ export default function mountsPage(view, { store, onLive, topbar }) {
         Une source qui se connecte avec le mot de passe global sur un nouveau chemin crée aussi un flux à la volée.</p>
       <div class="grid mounts">${list.map((m) => mountCard(m, { access: true }))}</div>
       ${list.some((m) => !m.configured) ? html`<p class="dim small mt">Les flux « non configurés » utilisent les réglages par défaut.
-        Cliquez sur <b>Configurer</b> pour leur donner un nom, une limite d'auditeurs, un flux de secours…</p>` : ''}`);
+        Cliquez sur <b>Configurer</b> pour leur donner un nom, une limite d'auditeurs, un flux de secours…</p>` : ''}
+      ${data.archived?.length ? html`<div class="card flush mt">
+        <div class="card-head"><h3>Anciens flux</h3><span class="dim small">plus configurés, encore présents dans les statistiques</span></div>
+        <div class="table-wrap mt"><table><tbody>${data.archived.map((a) => html`<tr>
+          <td><code>${a.mount}</code></td><td class="dim small">${fmtNum(a.sessions)} écoute${a.sessions > 1 ? 's' : ''}</td>
+          <td class="dim small">dernière activité ${fmtDateTime(a.last)}</td>
+          <td class="right"><button class="btn sm ghost danger" data-purge="${a.mount}">${icon('trash')} Effacer l'historique</button></td></tr>`)}
+        </tbody></table></div></div>` : ''}`);
   }
 
   async function load() {
@@ -199,6 +237,14 @@ export default function mountsPage(view, { store, onLive, topbar }) {
   }
 
   bindMountActions(view, load);
+  view.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-purge]');
+    if (!b) return;
+    const name = b.dataset.purge;
+    if (!await confirmDialog(`Effacer l'historique de ${name} ?`, "Les écoutes, courbes d'auditeurs et titres diffusés de ce flux seront définitivement supprimés des statistiques.", { confirm: 'Effacer', danger: true })) return;
+    await run(b, () => api(`/mounts-stats?mount=${encodeURIComponent(name)}`, { method: 'DELETE' }), 'Historique effacé');
+    load();
+  });
   load();
   let lastKey = '';
   return onLive(() => {

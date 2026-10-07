@@ -1,5 +1,6 @@
 import { api, html, icon, $, run, modal, confirmDialog, fmtNum, fmtDuration, fmtClock } from '../lib.js';
 import { player, playIcon } from '../player.js';
+import { openCueEditor, cueSummary } from '../cue-editor.js';
 
 function addTracksDialog(playlist, onDone) {
   let all = [];
@@ -95,19 +96,21 @@ export default function playlistsPage(view, { params, topbar }) {
           <div class="card-head"><h3>Titres</h3><div class="spacer"></div>
             <button class="btn sm primary" id="add-tracks">${icon('plus')} Ajouter des titres</button></div>
           <div class="table-wrap mt"><table>
-            <thead><tr><th class="num">#</th><th></th><th>Titre</th><th>Artiste</th><th class="num">Durée</th><th></th></tr></thead>
+            <thead><tr><th class="num">#</th><th></th><th>Titre</th><th>Artiste</th><th class="num">Durée</th><th>Cue</th><th></th></tr></thead>
             <tbody>${current.items.length ? current.items.map((m, i) => html`<tr>
               <td class="num dim">${i + 1}</td>
               <td><button class="play-btn" style="width:28px;height:28px" data-play="/api/autodj/media/${m.id}/audio">${playIcon(`/api/autodj/media/${m.id}/audio`)}</button></td>
               <td class="truncate"><b>${m.title || m.original_name}</b></td>
               <td class="truncate">${m.artist || '—'}</td>
               <td class="num">${m.duration ? fmtClock(m.duration) : ''}</td>
+              <td>${cueSummary(m)}</td>
               <td class="right nowrap">
+                <button class="btn sm ghost icon" data-cue="${m.id}" title="Points cue">${icon('wave')}</button>
                 <button class="btn sm ghost icon" data-move="${i}" data-dir="-1" ${i === 0 ? 'disabled' : ''} title="Monter">${icon('up')}</button>
                 <button class="btn sm ghost icon" data-move="${i}" data-dir="1" ${i === current.items.length - 1 ? 'disabled' : ''} title="Descendre">${icon('down')}</button>
                 <button class="btn sm ghost icon danger" data-remove="${i}" title="Retirer de la playlist">${icon('x')}</button>
               </td></tr>`)
-            : html`<tr><td colspan="6" class="empty">Playlist vide : cliquez sur « Ajouter des titres ».</td></tr>`}</tbody>
+            : html`<tr><td colspan="7" class="empty">Playlist vide : cliquez sur « Ajouter des titres ».</td></tr>`}</tbody>
           </table></div>
         </div>` : html`<div class="card empty">${lists.length ? 'Choisissez une playlist à gauche.' : ''}</div>`}
       </div></div>`);
@@ -139,6 +142,8 @@ export default function playlistsPage(view, { params, topbar }) {
 
   view.addEventListener('click', async (e) => {
     if (e.target.closest('#add-tracks')) addTracksDialog(current, load);
+    const cue = e.target.closest('[data-cue]');
+    if (cue && await openCueEditor(current.items.find((m) => m.id === Number(cue.dataset.cue)))) load();
     if (e.target.closest('#pl-del')) {
       if (!await confirmDialog('Supprimer la playlist ?', `« ${current.name} » sera supprimée (les musiques restent dans la bibliothèque). Les créneaux de la grille qui l'utilisent seront aussi supprimés.`, { confirm: 'Supprimer', danger: true })) return;
       await run(null, () => api(`/autodj/playlists/${current.id}`, { method: 'DELETE' }), 'Playlist supprimée');

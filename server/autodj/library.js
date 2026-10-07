@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { db } from '../db.js';
 import { DATA_DIR } from '../settings.js';
+import { envelope, detectCues, waveform } from './cue.js';
 
 export const MUSIC_DIR = path.join(DATA_DIR, 'music');
 const EXTENSIONS = ['mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav'];
@@ -120,6 +121,79 @@ export function deleteMedia(id) {
   q.remove.run(m.id);
   fs.rmSync(mediaPath(m), { force: true });
 }
+
+// ---------- Points cue ----------
+
+/** Points cue effectifs d'un titre (avec les valeurs par défaut : tout le fichier, sans chevauchement). */
+export function cuesOf(m) {
+  const duration = m.duration || 0;
+  const cueIn = Math.max(0, m.cue_in || 0);
+  const cueOut = m.cue_out && m.cue_out > cueIn ? Math.min(m.cue_out, duration || m.cue_out) : duration;
+  const mix = m.cue_mix != null && m.cue_mix >= cueIn && m.cue_mix <= cueOut ? m.cue_mix : cueOut;
+  return { cueIn, mix, cueOut, fadeIn: m.fade_in || 0, fadeOut: m.fade_out || 0, auto: !!m.cue_auto, analyzed: !!m.analyzed_at };
+}
+
+/** Analyse le fichier et place les points cue automatiquement (sauf s'ils ont été réglés à la main et que force est faux). */
+export async function autoCue(id, { force = false } = {}) {
+  const m = getMedia(id);
+  if (!m) throw fail('Titre introuvable', 404);
+  const env = await envelope(mediaPath(m));
+  const c = detectCues(env);
+  const now = Date.now();
+  if (m.cue_auto || force) {
+    db.prepare('UPDATE media SET cue_in = ?, cue_mix = ?, cue_out = ?, fade_in = 0, fade_out = 0, cue_auto = 1, cue_level = ?, analyzed_at = ?, duration = COALESCE(duration, ?) WHERE id = ?')
+      .run(c.cueIn, c.mix, c.cueOut, c.level ?? null, now, env.duration || null, m.id);
+  } else {
+    db.prepare('UPDATE media SET cue_level = ?, analyzed_at = ? WHERE id = ?').run(c.level ?? null, now, m.id);
+  }
+  return getMedia(id);
+}
+
+/** Enregistre des points cue réglés à la main. */
+export function setCues(id, b) {
+  const m = getMedia(id);
+  if (!m) throw fail('Titre introuvable', 404);
+  const dur = m.duration || Infinity;
+  const num = (v) => (v === null || v === undefined || v === '' ? null : Math.round(Number(v) * 100) / 100);
+  const cueIn = Math.max(0, num(b.cueIn) ?? 0);
+  const cueOut = num(b.cueOut);
+  const mix = num(b.mix);
+  const fadeIn = Math.max(0, num(b.fadeIn) ?? 0);
+  const fadeOut = Math.max(0, num(b.fadeOut) ?? 0);
+  if ([cueIn, cueOut, mix, fadeIn, fadeOut].some((v) => v !== null && !Number.isFinite(v))) throw fail('Valeur invalide');
+  const end = cueOut ?? (Number.isFinite(dur) ? dur : null);
+  if (end !== null && (end <= cueIn || end > dur + 0.5)) throw fail('Le cue out doit être après le cue in et avant la fin du fichier');
+  if (mix !== null && (mix < cueIn || (end !== null && mix > end))) throw fail('Le point d\'enchaînement doit être entre le cue in et le cue out');
+  if (fadeIn > 30 || fadeOut > 30) throw fail('Fondu de 30 secondes maximum');
+  db.prepare('UPDATE media SET cue_in = ?, cue_mix = ?, cue_out = ?, fade_in = ?, fade_out = ?, cue_auto = 0 WHERE id = ?')
+    .run(cueIn, mix, cueOut, fadeIn, fadeOut, m.id);
+  return getMedia(id);
+}
+
+/** Forme d'onde pour l'éditeur de points cue. */
+export async function mediaWaveform(id) {
+  const m = getMedia(id);
+  if (!m) throw fail('Titre introuvable', 404);
+  const env = await envelope(mediaPath(m));
+  return { duration: env.duration || m.duration, ...waveform(env), suggested: detectCues(env) };
+}
+
+// File d'analyse : un fichier à la fois, en tâche de fond (après un envoi ou « Analyser toute la bibliothèque »)
+const pending = [];
+let analysing = false;
+export function queueAutoCue(ids, opts = {}) {
+  for (const id of ids) if (!pending.some((p) => p.id === id)) pending.push({ id, ...opts });
+  if (!analysing) drain();
+}
+async function drain() {
+  analysing = true;
+  while (pending.length) {
+    const { id, force } = pending.shift();
+    try { await autoCue(id, { force }); } catch {}
+  }
+  analysing = false;
+}
+export const analysisPending = () => pending.length + (analysing ? 1 : 0);
 
 export function libraryStats() {
   return db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(duration), 0) AS duration, COALESCE(SUM(size), 0) AS size FROM media').get();

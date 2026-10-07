@@ -29,7 +29,8 @@ export default function autodjPage(view, { store, onLive }) {
   function nowCard() {
     const [cls, label] = STATE[s.state] || ['', s.state];
     const cur = s.current;
-    const dur = cur?.media?.duration || 0;
+    const dur = cur?.duration || cur?.media?.duration || 0;
+    const mixPct = cur && cur.mixAt && cur.mixAt < dur ? (cur.mixAt / dur) * 100 : null;
     const elapsed = cur ? (Date.now() - cur.startedAt) / 1000 : 0;
     const url = playUrl(s.mount);
     return html`
@@ -48,7 +49,8 @@ export default function autodjPage(view, { store, onLive }) {
           <div class="np-title" style="font-size:19px">${cur ? cur.title : s.state === 'playing' ? 'Silence : aucune playlist à jouer' : '—'}</div>
           ${cur && dur ? html`<div class="row" style="gap:10px;margin-top:8px;flex-wrap:nowrap">
             <span class="small dim" data-elapsed="${cur.startedAt}">${fmtClock(Math.min(elapsed, dur))}</span>
-            <div class="meter" style="flex:1"><div data-progress="${cur.startedAt}" data-dur="${dur}" style="width:${Math.min(100, (elapsed / dur) * 100)}%;background:var(--accent)"></div></div>
+            <div class="meter" style="flex:1;position:relative"><div data-progress="${cur.startedAt}" data-dur="${dur}" style="width:${Math.min(100, (elapsed / dur) * 100)}%;background:var(--accent)"></div>
+              ${mixPct !== null ? html`<span title="Enchaînement avec le titre suivant" style="position:absolute;top:-3px;bottom:-3px;left:${mixPct}%;width:2px;background:var(--warn);border-radius:1px"></span>` : ''}</div>
             <span class="small dim">${fmtClock(dur)}</span></div>` : ''}
         </div>
       </div>
@@ -106,6 +108,11 @@ export default function autodjPage(view, { store, onLive }) {
             <option value="mp3" ${s.format === 'mp3' ? 'selected' : ''}>MP3</option><option value="aac" ${s.format === 'aac' ? 'selected' : ''}>AAC</option></select>
             <span class="hint">Utilisez le même format et le même débit que vos animateurs pour des transitions propres</span></label>
           <label class="field">Débit<select name="bitrate" style="width:100%">${[64, 96, 128, 160, 192, 256, 320].map((b) => html`<option value="${b}" ${b === s.bitrate ? 'selected' : ''}>${b} kbps</option>`)}</select></label>
+          <div class="stack full" style="gap:8px">
+            <label class="check"><input type="checkbox" name="crossfade" ${s.crossfade !== false ? 'checked' : ''}> Enchaînements aux points cue : le titre suivant démarre au repère « MIX », par-dessus la fin du titre en cours</label>
+            <label class="check"><input type="checkbox" name="autoCue" ${s.autoCue !== false ? 'checked' : ''}> Points cue automatiques : silences du début et de la fin coupés, enchaînement placé à l'analyse de chaque nouveau titre</label>
+            <span class="hint">Réglez les points cue titre par titre dans la Bibliothèque ou les Playlists (bouton ${icon('wave')}).</span>
+          </div>
         </div>
       </form>
 
@@ -172,7 +179,7 @@ export default function autodjPage(view, { store, onLive }) {
         body: {
           defaultPlaylist: f.defaultPlaylist.value || null, jinglePlaylist: f.jinglePlaylist.value || null,
           jingleEvery: Number(f.jingleEvery.value), mount: f.mount.value, liveMount: f.liveMount.value,
-          format: f.format.value, bitrate: Number(f.bitrate.value),
+          format: f.format.value, bitrate: Number(f.bitrate.value), crossfade: f.crossfade.checked, autoCue: f.autoCue.checked,
         },
       }), 'Réglages enregistrés');
       await load();

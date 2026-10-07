@@ -110,6 +110,13 @@ const sessionCols = new Set(db.prepare('PRAGMA table_info(sessions)').all().map(
 for (const [col, type] of [['device', 'TEXT'], ['city', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL']]) {
   if (!sessionCols.has(col)) db.exec(`ALTER TABLE sessions ADD COLUMN ${col} ${type}`);
 }
+// Points cue (en secondes depuis le début du fichier) : entrée, enchaînement, sortie et fondus.
+// cue_auto = 1 tant que les points viennent de la détection automatique (0 dès qu'on les règle à la main).
+const mediaCols = new Set(db.prepare('PRAGMA table_info(media)').all().map((c) => c.name));
+for (const [col, type] of [['cue_in', 'REAL'], ['cue_mix', 'REAL'], ['cue_out', 'REAL'], ['fade_in', 'REAL NOT NULL DEFAULT 0'],
+  ['fade_out', 'REAL NOT NULL DEFAULT 0'], ['cue_auto', 'INTEGER NOT NULL DEFAULT 1'], ['cue_level', 'REAL'], ['analyzed_at', 'INTEGER']]) {
+  if (!mediaCols.has(col)) db.exec(`ALTER TABLE media ADD COLUMN ${col} ${type}`);
+}
 
 export function tx(fn) {
   db.exec('BEGIN');

@@ -11,11 +11,35 @@ export function autodjConfig() {
 
 export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   // ---------- Bibliothèque ----------
-  app.get('/api/autodj/media', wrap((req) => ({ items: lib.listMedia(String(req.query.q || '')), stats: lib.libraryStats() })));
+  app.get('/api/autodj/media', wrap((req) => ({
+    items: lib.listMedia(String(req.query.q || '')), stats: lib.libraryStats(), analysing: lib.analysisPending(),
+  })));
   app.post('/api/autodj/media', wrap(async (req) => {
     const m = await lib.importUpload(req);
     logEvent('info', 'autodj', `Ajouté à la bibliothèque : ${lib.displayTitle(m)}`);
+    // Points cue automatiques en tâche de fond
+    if (autodjConfig().autoCue !== false) lib.queueAutoCue([m.id]);
     return m;
+  }));
+
+  // ---------- Points cue ----------
+  app.get('/api/autodj/media/:id/waveform', wrap((req) => lib.mediaWaveform(req.params.id)));
+  app.put('/api/autodj/media/:id/cues', wrap((req) => {
+    const m = lib.setCues(req.params.id, req.body || {});
+    autodj.resetUpcoming();
+    return m;
+  }));
+  app.post('/api/autodj/media/:id/autocue', wrap(async (req) => {
+    const m = await lib.autoCue(req.params.id, { force: true });
+    autodj.resetUpcoming();
+    return m;
+  }));
+  // Analyse de toute la bibliothèque : les titres réglés à la main ne sont pas modifiés (sauf force)
+  app.post('/api/autodj/autocue', wrap((req) => {
+    const force = !!req.body?.force;
+    const ids = lib.listMedia().filter((m) => force || m.cue_auto).map((m) => m.id);
+    lib.queueAutoCue(ids, { force });
+    return { queued: ids.length };
   }));
   app.put('/api/autodj/media/:id', wrap((req) => lib.updateMedia(req.params.id, req.body || {})));
   app.delete('/api/autodj/media/:id', wrap((req) => {
@@ -88,6 +112,7 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
     for (const k of ['defaultPlaylist', 'jinglePlaylist']) {
       if (k in b) next[k] = b[k] ? Number(b[k]) : null;
     }
+    for (const k of ['crossfade', 'autoCue']) if (k in b) next[k] = !!b[k];
     if ('jingleEvery' in b) next.jingleEvery = Math.max(0, Math.min(50, Math.floor(Number(b.jingleEvery) || 0)));
     updateSettings((s) => { s.autodj = next; });
     autodj.resetUpcoming();
@@ -145,4 +170,11 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   app.post('/api/autodj/skip', wrap(() => { autodj.skip(); return autodj.status(); }));
   app.post('/api/autodj/queue', wrap((req) => { autodj.enqueue(req.body?.mediaId); return autodj.status(); }));
   app.delete('/api/autodj/queue/:index', wrap((req) => { autodj.dequeue(req.params.index); return autodj.status(); }));
+
+  // Titres jamais analysés (bibliothèque d'avant les points cue) : analyse en tâche de fond après le démarrage
+  setTimeout(() => {
+    if (autodjConfig().autoCue === false) return;
+    const ids = lib.listMedia().filter((m) => !m.analyzed_at).map((m) => m.id);
+    if (ids.length) lib.queueAutoCue(ids);
+  }, 15_000).unref();
 }

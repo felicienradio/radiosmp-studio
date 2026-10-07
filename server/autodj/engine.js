@@ -1,18 +1,22 @@
 // Moteur de l'AutoDJ.
 //
 // Un encodeur ffmpeg permanent lit de l'audio brut (PCM 44,1 kHz stéréo) sur son entrée, au rythme réel (-re),
-// et le diffuse vers le point de montage de l'AutoDJ. Chaque titre est décodé par un ffmpeg séparé dont la sortie
-// est injectée dans l'encodeur : le flux ne s'interrompt jamais entre deux titres. Sans rien à jouer, on envoie du
+// et le diffuse vers le point de montage de l'AutoDJ. Chaque titre est lu par une « platine » : un ffmpeg qui
+// décode le fichier entre son cue in et son cue out. Le mélangeur additionne les platines actives avec leurs fondus :
+// au point d'enchaînement (mix) d'un titre, le suivant démarre par-dessus sa fin. Sans rien à jouer, il envoie du
 // silence pour garder la connexion avec Icecast.
 import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import { getMedia, mediaPath, markPlayed, displayTitle } from './library.js';
+import { getMedia, mediaPath, markPlayed, displayTitle, cuesOf } from './library.js';
 import { getPlaylist, playlistMediaIds, activeRule } from './playlists.js';
 
 const RATE = 44100;
-const BYTES_PER_SEC = RATE * 2 * 2;
-const SILENCE = Buffer.alloc(BYTES_PER_SEC / 4); // 250 ms
+const FRAME = 4; // 16 bits x 2 canaux
+const BYTES_PER_SEC = RATE * FRAME;
+const CHUNK = RATE / 20; // le mélangeur avance par blocs de 50 ms
+const PREROLL = 4; // s : la platine suivante se prépare 4 s avant son départ
+const SKIP_FADE = 1.5; // s : fondu de sortie quand on passe un titre
 
 export const AUTODJ_DEFAULTS = {
   enabled: false,
@@ -23,12 +27,125 @@ export const AUTODJ_DEFAULTS = {
   jinglePlaylist: null,
   jingleEvery: 4,
   liveMount: '/live',
+  crossfade: true, // enchaînements aux points de mix (sinon les titres se suivent sans se chevaucher)
+  autoCue: true, // points cue détectés automatiquement à l'import
 };
 
 export function ffmpegAvailable() {
   return new Promise((resolve) => {
     execFile('ffmpeg', ['-version'], { windowsHide: true, timeout: 5000 }, (err) => resolve(!err));
   });
+}
+
+/** Une platine : décode un titre (de son cue in à son cue out) et garde quelques secondes d'avance en mémoire. */
+class Deck {
+  constructor(media, item, { crossfade }) {
+    const c = cuesOf(media);
+    this.media = media;
+    this.item = item;
+    this.length = c.cueOut > c.cueIn ? (c.cueOut - c.cueIn) * RATE : Infinity; // en échantillons
+    this.mixAt = crossfade && Number.isFinite(this.length) ? (c.mix - c.cueIn) * RATE : this.length;
+    this.fadeIn = c.fadeIn * RATE;
+    this.fadeOut = Number.isFinite(this.length) ? c.fadeOut * RATE : 0;
+    this.pos = 0;
+    this.chunks = [];
+    this.buffered = 0;
+    this.ended = false;
+    this.forced = null; // fondu de sortie imposé (« Passer »)
+    this.waiters = [];
+    const args = ['-hide_banner', '-loglevel', 'error'];
+    if (c.cueIn > 0) args.push('-ss', c.cueIn.toFixed(3));
+    args.push('-i', mediaPath(media), '-vn');
+    if (Number.isFinite(this.length)) args.push('-t', (c.cueOut - c.cueIn).toFixed(3));
+    args.push('-f', 's16le', '-ar', String(RATE), '-ac', '2', 'pipe:1');
+    this.proc = spawn('ffmpeg', args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    this.proc.on('error', () => this.finish());
+    this.proc.stdout.on('data', (chunk) => {
+      this.chunks.push(chunk);
+      this.buffered += chunk.length;
+      if (this.buffered > 6 * BYTES_PER_SEC) this.proc.stdout.pause();
+      this.wake();
+    });
+    this.proc.stdout.on('end', () => this.finish());
+  }
+
+  finish() {
+    this.ended = true;
+    this.wake();
+  }
+
+  wake() {
+    const w = this.waiters;
+    this.waiters = [];
+    w.forEach((f) => f());
+  }
+
+  /** Attend d'avoir `bytes` octets en mémoire (ou la fin du fichier), au plus `ms` millisecondes. */
+  ready(bytes, ms) {
+    const deadline = Date.now() + ms;
+    const loop = () => {
+      if (this.ended || this.buffered >= bytes || Date.now() >= deadline) return Promise.resolve();
+      return new Promise((resolve) => {
+        const t = setTimeout(resolve, deadline - Date.now());
+        this.waiters.push(() => { clearTimeout(t); resolve(); });
+      }).then(loop);
+    };
+    return loop();
+  }
+
+  read(bytes) {
+    const parts = [];
+    let need = bytes;
+    while (need > 0 && this.chunks.length) {
+      const c = this.chunks[0];
+      if (c.length <= need) {
+        parts.push(c);
+        this.chunks.shift();
+        need -= c.length;
+      } else {
+        parts.push(c.subarray(0, need));
+        this.chunks[0] = c.subarray(need);
+        need = 0;
+      }
+    }
+    const out = parts.length === 1 ? parts[0] : Buffer.concat(parts);
+    this.buffered -= out.length;
+    if (this.buffered < 3 * BYTES_PER_SEC && !this.ended) this.proc.stdout.resume();
+    // Fin de fichier : on ne garde que des échantillons complets
+    if (out.length % FRAME) {
+      this.chunks = [];
+      this.buffered = 0;
+      return out.subarray(0, out.length - (out.length % FRAME));
+    }
+    return out;
+  }
+
+  /** Volume (0..1) à l'échantillon f : fondus d'entrée et de sortie, et fondu imposé par « Passer ». */
+  gain(f) {
+    let g = 1;
+    if (this.fadeIn && f < this.fadeIn) g *= f / this.fadeIn;
+    if (this.fadeOut && f > this.length - this.fadeOut) g *= Math.max(0, (this.length - f) / this.fadeOut);
+    if (this.forced) g *= Math.max(0, 1 - (f - this.forced.start) / this.forced.len);
+    return g;
+  }
+
+  /** Moment (en échantillons) où le titre suivant doit démarrer. */
+  get nextAt() {
+    return Math.min(this.forced ? this.forced.start : this.mixAt, this.length);
+  }
+
+  get done() {
+    return (this.ended && this.buffered < FRAME) || this.pos >= this.length
+      || (!!this.forced && this.pos >= this.forced.start + this.forced.len);
+  }
+
+  kill() {
+    this.proc.stdout.removeAllListeners('data');
+    this.proc.kill();
+    this.chunks = [];
+    this.buffered = 0;
+    this.finish();
+  }
 }
 
 export class AutoDJ extends EventEmitter {
@@ -44,8 +161,10 @@ export class AutoDJ extends EventEmitter {
     Object.assign(this, { getConfig, getIcecast, api, log });
     this.state = 'stopped';
     this.encoder = null;
-    this.decoder = null;
-    this.current = null; // { media, startedAt, source }
+    this.decks = []; // platines en cours de lecture (plusieurs pendant un enchaînement)
+    this.main = null; // platine du titre en cours
+    this.nextDeck = null; // platine du titre suivant, préparée quelques secondes avant son départ
+    this.current = null; // { media, startedAt, source, duration, mixAt }
     this.queue = []; // titres demandés à la main (« jouer ensuite »)
     this.upcoming = []; // titres déjà choisis automatiquement
     this.history = [];
@@ -54,7 +173,7 @@ export class AutoDJ extends EventEmitter {
     this.sinceJingle = 0;
     this.lastError = null;
     this.restarts = [];
-    this.silenceTimer = null;
+    this.lastEmpty = 0; // dernière fois qu'il n'y avait rien à jouer
     this.ffmpeg = null;
   }
 
@@ -73,9 +192,12 @@ export class AutoDJ extends EventEmitter {
         title: displayTitle(this.current.media),
         startedAt: this.current.startedAt,
         source: this.current.source,
+        duration: this.current.duration,
+        mixAt: this.current.mixAt,
       },
       queue: this.queue.map((id) => getMedia(id)).filter(Boolean),
-      upcoming: this.upcoming.slice(0, 8).map((u) => ({ ...getMedia(u.id), source: u.source })).filter((m) => m.id),
+      upcoming: [...(this.nextDeck ? [this.nextDeck.item] : []), ...this.upcoming].slice(0, 8)
+        .map((u) => ({ ...getMedia(u.id), source: u.source })).filter((m) => m.id),
       history: this.history.slice(0, 15),
       activeRule: rule,
       activePlaylist: playlistId ? getPlaylist(playlistId) && { id: playlistId, name: getPlaylist(playlistId).name } : null,
@@ -178,8 +300,7 @@ export class AutoDJ extends EventEmitter {
     enc.on('exit', (code) => {
       if (this.encoder !== enc) return;
       this.encoder = null;
-      this.killDecoder();
-      this.stopSilence();
+      this.killDecks();
       const wanted = this.getConfig().enabled;
       if (this.state !== 'stopping' && wanted) {
         const why = stderr.trim().split('\n').pop() || `code ${code}`;
@@ -194,7 +315,7 @@ export class AutoDJ extends EventEmitter {
 
     this.state = 'playing';
     this.log('info', 'autodj', `AutoDJ démarré sur ${c.mount} (${c.format.toUpperCase()} ${c.bitrate} kbps)`);
-    this.playNext();
+    this.pump(enc).catch((err) => this.log('error', 'autodj', `Mélangeur : ${err.message}`));
   }
 
   scheduleRestart() {
@@ -216,42 +337,34 @@ export class AutoDJ extends EventEmitter {
     this.changed();
   }
 
-  playNext() {
-    if (!this.encoder) return;
-    this.killDecoder();
-    const item = this.next();
-    const media = item && getMedia(item.id);
-    if (!media || !fs.existsSync(mediaPath(media))) {
-      if (item && media) this.log('warning', 'autodj', `Fichier introuvable : ${displayTitle(media)}`);
-      if (item) return this.playNext(); // titre supprimé entre-temps : on passe au suivant
-      this.current = null;
-      this.startSilence();
-      this.changed();
-      return;
-    }
-    this.stopSilence();
-    const dec = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', mediaPath(media), '-vn',
-      '-f', 's16le', '-ar', String(RATE), '-ac', '2', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    this.decoder = dec;
-    // Envoi manuel (plutôt que pipe) pour compter les octets : on garde l'alignement des échantillons (4 octets)
-    dec.written = 0;
-    const enc = this.encoder;
-    dec.stdout.on('data', (chunk) => {
-      if (this.decoder !== dec || !this.encoder) return;
-      dec.written += chunk.length;
-      if (!enc.stdin.write(chunk)) {
-        dec.stdout.pause();
-        enc.stdin.once('drain', () => dec.stdout.resume());
-      }
-    });
-    dec.on('exit', () => {
-      if (this.decoder !== dec) return;
-      this.decoder = null;
-      this.align(dec);
-      setImmediate(() => this.playNext());
-    });
+  // ---------- Platines et mélangeur ----------
 
-    this.current = { media, startedAt: Date.now(), source: item.source };
+  /** Prépare la platine du titre suivant : le décodage commence, le titre n'est pas encore mélangé. */
+  prepareNext() {
+    for (let tries = 0; tries < 10; tries++) {
+      const item = this.next();
+      if (!item) break;
+      const media = getMedia(item.id);
+      if (!media) continue; // supprimé entre-temps
+      if (!fs.existsSync(mediaPath(media))) {
+        this.log('warning', 'autodj', `Fichier introuvable : ${displayTitle(media)}`);
+        continue;
+      }
+      this.nextDeck = new Deck(media, item, { crossfade: this.getConfig().crossfade !== false });
+      return this.nextDeck;
+    }
+    this.lastEmpty = Date.now();
+    return null;
+  }
+
+  /** Le titre préparé démarre : il devient le titre en cours. */
+  startDeck(d) {
+    this.nextDeck = null;
+    this.decks.push(d);
+    this.main = d;
+    const { media, item } = d;
+    const sec = (x) => (Number.isFinite(x) ? Math.round((x / RATE) * 100) / 100 : media.duration || 0);
+    this.current = { media, startedAt: Date.now(), source: item.source, duration: sec(d.length), mixAt: sec(d.mixAt) };
     this.history.unshift({ id: media.id, title: displayTitle(media), at: Date.now(), source: item.source });
     this.history.length = Math.min(this.history.length, 50);
     markPlayed(media.id);
@@ -259,57 +372,100 @@ export class AutoDJ extends EventEmitter {
     // Au démarrage, la source n'est pas encore connectée à Icecast : on réessaie quelques fois.
     const title = displayTitle(media);
     const send = (attempt) => this.api.updateMetadata(this.getConfig().mount, title).catch(() => {
-      if (attempt < 6 && this.current?.media.id === media.id) setTimeout(() => send(attempt + 1), 1500);
+      if (attempt < 6 && this.main === d) setTimeout(() => send(attempt + 1), 1500);
     });
     send(1);
     this.changed();
   }
 
-  /** Envoie du silence quand il n'y a rien à jouer (Icecast couperait la source sinon). */
-  startSilence() {
-    if (this.silenceTimer || !this.encoder) return;
-    const tick = () => {
-      if (!this.encoder) return this.stopSilence();
-      this.encoder.stdin.write(SILENCE);
-      // Toutes les 5 s, on regarde si une playlist est devenue disponible
-      if (++this.silenceTicks % 20 === 0) {
-        this.fillUpcoming();
-        if (this.queue.length || this.upcoming.length) this.playNext();
+  /** Démarre le titre suivant quand le titre en cours atteint son point d'enchaînement (ou se termine). */
+  transitions() {
+    const canLook = Date.now() - this.lastEmpty > 5000; // rien à jouer : on regarde à nouveau toutes les 5 s
+    const main = this.main;
+    if (!main || main.done) {
+      this.main = null;
+      if (!this.nextDeck && canLook) this.prepareNext();
+      if (this.nextDeck) this.startDeck(this.nextDeck);
+      else if (this.current) {
+        this.current = null;
+        this.changed();
       }
-    };
-    this.silenceTicks = 0;
-    this.silenceTimer = setInterval(tick, 250);
+      return;
+    }
+    if (!this.nextDeck && canLook && main.pos >= main.nextAt - PREROLL * RATE) this.prepareNext();
+    if (this.nextDeck && main.pos >= main.nextAt) this.startDeck(this.nextDeck);
   }
 
-  stopSilence() {
-    clearInterval(this.silenceTimer);
-    this.silenceTimer = null;
+  /** Boucle du mélangeur : 50 ms d'audio à la fois, au rythme de l'encodeur (qui lit en temps réel). */
+  async pump(enc) {
+    const bytes = CHUNK * FRAME;
+    const acc = new Float32Array(CHUNK * 2);
+    while (this.encoder === enc) {
+      this.transitions();
+      const active = this.decks;
+      // Une platine qui vient de démarrer a parfois besoin de quelques millisecondes pour décoder
+      await Promise.all(active.map((d) => d.ready(bytes, 1500)));
+      if (this.encoder !== enc) break;
+      acc.fill(0);
+      for (const d of active) {
+        const data = d.read(bytes);
+        const frames = data.length / FRAME;
+        for (let f = 0; f < frames; f++) {
+          const g = d.gain(d.pos + f);
+          if (g === 0) continue;
+          acc[f * 2] += data.readInt16LE(f * 4) * g;
+          acc[f * 2 + 1] += data.readInt16LE(f * 4 + 2) * g;
+        }
+        d.pos += frames;
+      }
+      const out = Buffer.allocUnsafe(bytes);
+      for (let i = 0; i < acc.length; i++) out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(acc[i]))), i * 2);
+      for (const d of active) if (d.done) d.kill();
+      this.decks = this.decks.filter((d) => !d.done);
+      if (!enc.stdin.write(out)) {
+        await new Promise((resolve) => {
+          const done = () => { enc.stdin.off('drain', done); enc.off('exit', done); resolve(); };
+          enc.stdin.once('drain', done);
+          enc.once('exit', done);
+        });
+      }
+    }
   }
 
-  killDecoder() {
-    if (!this.decoder) return;
-    const d = this.decoder;
-    this.decoder = null;
-    d.stdout.removeAllListeners('data');
+  killDecks() {
+    for (const d of this.decks) d.kill();
+    this.nextDeck?.kill();
+    this.decks = [];
+    this.main = null;
+    this.nextDeck = null;
+  }
+
+  /** Annule le titre préparé (il reprend sa place dans la file). */
+  unprepare() {
+    const d = this.nextDeck;
+    if (!d) return;
     d.kill();
-    this.align(d);
+    this.nextDeck = null;
+    if (d.item.source === 'demande') this.queue.unshift(d.item.id);
+    else this.upcoming.unshift(d.item);
   }
 
-  /** Complète le dernier échantillon d'un titre coupé en plein milieu (sinon le reste du flux serait du bruit). */
-  align(dec) {
-    const pad = (4 - (dec.written % 4)) % 4;
-    if (pad && this.encoder) this.encoder.stdin.write(Buffer.alloc(pad));
-    dec.written += pad;
-  }
-
+  /** Passe au titre suivant : fondu rapide du titre en cours, le suivant démarre aussitôt. */
   skip() {
     if (!this.encoder) throw Object.assign(new Error('L\'AutoDJ n\'est pas démarré'), { status: 400 });
-    this.playNext();
+    const m = this.main;
+    if (m && !m.forced) m.forced = { start: m.pos, len: SKIP_FADE * RATE };
+    this.lastEmpty = 0;
+    if (!this.nextDeck) this.prepareNext();
+    this.changed();
   }
 
   enqueue(id) {
     if (!getMedia(id)) throw Object.assign(new Error('Titre introuvable'), { status: 404 });
     this.queue.push(Number(id));
+    this.lastEmpty = 0;
+    // Une demande passe avant le titre automatique déjà préparé
+    if (this.nextDeck && this.nextDeck.item.source !== 'demande') this.unprepare();
     this.changed();
   }
 
@@ -318,23 +474,29 @@ export class AutoDJ extends EventEmitter {
     this.changed();
   }
 
-  /** Oublie les titres préparés (après un changement de playlist ou de grille). */
+  /** Oublie les titres préparés (après un changement de playlist, de grille ou de points cue). */
   resetUpcoming() {
+    if (this.nextDeck && this.nextDeck.item.source !== 'demande') {
+      this.nextDeck.kill();
+      this.nextDeck = null;
+    } else if (this.nextDeck) {
+      this.unprepare();
+    }
     this.upcoming = [];
+    this.lastEmpty = 0;
     this.changed();
   }
 
   async stop() {
     clearTimeout(this.restartTimer);
     this.state = 'stopping';
-    this.stopSilence();
-    this.killDecoder();
+    this.killDecks();
     const enc = this.encoder;
+    this.encoder = null;
     if (enc) {
       enc.stdin.end();
       enc.kill();
     }
-    this.encoder = null;
     this.state = 'stopped';
     this.current = null;
     this.log('info', 'autodj', 'AutoDJ arrêté');

@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
 import { ROOT, loadSettings, getSettings, updateSettings, randomPassword, detectIcecastPaths } from './settings.js';
-import { logEvent, backfillSessions } from './db.js';
+import { db, tx, logEvent, backfillSessions } from './db.js';
 import { parseUserAgent } from './useragent.js';
 import { IcecastApi, IcecastError } from './icecast/api.js';
 import { IcecastProcess, LOG_DIR, readTail } from './icecast/process.js';
@@ -180,7 +180,22 @@ function mountsView() {
   return [...configured, ...extra];
 }
 
-app.get('/api/mounts', wrap(() => ({ mounts: mountsView(), process: proc.status(), connection: connectionInfo() })));
+/** Flux qui n'existent plus que dans les statistiques (ni configurés, ni en direct). */
+function archivedMounts() {
+  const known = new Set(mountsView().map((m) => m.name));
+  return db.prepare(`SELECT mount, COUNT(*) AS sessions, MAX(COALESCE(ended_at, last_seen)) AS last FROM sessions GROUP BY mount
+    UNION ALL SELECT mount, 0, MAX(ts) FROM samples GROUP BY mount`).all()
+    .reduce((acc, r) => {
+      if (known.has(r.mount)) return acc;
+      const a = acc.find((x) => x.mount === r.mount) || (acc.push({ mount: r.mount, sessions: 0, last: 0 }), acc[acc.length - 1]);
+      a.sessions += r.sessions;
+      a.last = Math.max(a.last, r.last || 0);
+      return acc;
+    }, [])
+    .sort((a, b) => b.last - a.last);
+}
+
+app.get('/api/mounts', wrap(() => ({ mounts: mountsView(), archived: archivedMounts(), process: proc.status(), connection: connectionInfo() })));
 
 app.post('/api/mounts', wrap((req) => {
   const m = cleanMount(req.body);
@@ -209,12 +224,40 @@ app.post('/api/mounts/:id/password', wrap((req) => {
   return { password, process: proc.status() };
 }));
 
-app.delete('/api/mounts/:id', wrap((req) => {
+/** Efface l'historique d'un flux (auditeurs, courbes, titres, journal). */
+function purgeMountStats(name) {
+  tx(() => {
+    for (const t of ['samples', 'sessions', 'tracks', 'events']) db.prepare(`DELETE FROM ${t} WHERE mount = ?`).run(name);
+  });
+}
+
+app.delete('/api/mounts/:id', wrap(async (req) => {
   const m = ice().mounts.find((x) => x.id === req.params.id);
   if (!m) throw fail('Point de montage introuvable', 404);
-  updateSettings((s) => { s.icecast.mounts = s.icecast.mounts.filter((x) => x.id !== m.id); });
-  logEvent('info', 'config', `Point de montage ${m.name} supprimé`, m.name);
+  updateSettings((s) => {
+    s.icecast.mounts = s.icecast.mounts.filter((x) => x.id !== m.id);
+    // Les flux qui l'utilisaient comme secours n'en ont plus
+    for (const x of s.icecast.mounts) if (x.fallbackMount === m.name) x.fallbackMount = '';
+  });
+  // L'AutoDJ diffusait sur ce flux : on l'arrête
+  if (autodjConfig().mount === m.name && autodj.encoder) {
+    updateSettings((s) => { s.autodj = { ...autodjConfig(), enabled: false }; });
+    await autodj.stop();
+  }
+  // Un encodeur encore connecté est déconnecté
+  if (collector.live.mounts.some((l) => l.mount === m.name)) await api.killSource(m.name).catch(() => {});
+  if (req.query.stats === '1') purgeMountStats(m.name);
+  logEvent('info', 'config', `Point de montage ${m.name} supprimé${req.query.stats === '1' ? ' avec ses statistiques' : ''}`);
   return { process: proc.status() };
+}));
+
+// Flux qui n'existe plus que dans les statistiques (ancien point de montage) : on efface son historique
+app.delete('/api/mounts-stats', wrap((req) => {
+  const name = String(req.query.mount || '');
+  if (!name.startsWith('/')) throw fail('Point de montage invalide');
+  if (ice().mounts.some((x) => x.name === name)) throw fail('Ce flux est encore configuré : supprimez-le depuis la page Points de montage');
+  purgeMountStats(name);
+  logEvent('info', 'config', `Statistiques du flux ${name} effacées`);
 }));
 
 app.post('/api/mounts/metadata', wrap(async (req) => {
