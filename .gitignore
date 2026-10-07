@@ -1,0 +1,6 @@
+node_modules/
+# Données locales : réglages (mots de passe), base de stats, config et logs Icecast
+data/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+{
+  "name": "flux",
+  "version": "0.1.0",
+  "description": "Dashboard de gestion de flux Icecast : statistiques réelles, points de montage, auditeurs, pilotage du serveur",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test-source": "node scripts/test-source.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.2",
+    "maxmind": "^5.0.7"
+  }
+}

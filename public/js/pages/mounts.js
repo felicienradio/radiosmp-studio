@@ -1,0 +1,199 @@
+import { api, html, icon, $, run, modal, confirmDialog, promptDialog, formData, copyable, secret, fmtNum } from '../lib.js';
+import { mountCard } from './components.js';
+
+const EMPTY = {
+  name: '/', streamName: '', description: '', genre: '', url: '', maxListeners: 0,
+  username: '', password: '', fallbackMount: '', fallbackOverride: true, fallbackWhenFull: false,
+  hidden: false, public: false, relayUrl: '', onDemand: false,
+};
+
+function mountForm(m, others) {
+  return html`<form id="mount-form" class="stack">
+    <div class="form-grid">
+      <label class="field">Point de montage<input name="name" value="${m.name}" required placeholder="/live">
+        <span class="hint">Chemin du flux, ex. <code>/live</code> ou <code>/radio.mp3</code></span></label>
+      <label class="field">Nom de la radio<input name="streamName" value="${m.streamName}" placeholder="Ma Radio"></label>
+      <label class="field full">Description<input name="description" value="${m.description}" placeholder="La meilleure radio du coin"></label>
+      <label class="field">Genre<input name="genre" value="${m.genre}" placeholder="Pop, Rock, Talk…"></label>
+      <label class="field">Site web<input name="url" value="${m.url}" placeholder="https://"></label>
+      <label class="field">Auditeurs max.<input type="number" min="0" name="maxListeners" value="${m.maxListeners}">
+        <span class="hint">0 = illimité (dans la limite globale du serveur)</span></label>
+    </div>
+    <fieldset>
+      <legend>Source (encodeur)</legend>
+      <div class="form-grid">
+        <label class="field">Mot de passe dédié<div class="input-group"><input name="password" value="${m.password}" placeholder="vide = mot de passe source global" autocomplete="off">
+          <button type="button" class="btn icon" data-gen title="Générer">${icon('refresh')}</button></div>
+          <span class="hint">Permet de donner un accès limité à ce seul flux</span></label>
+        <label class="field">Utilisateur<input name="username" value="${m.username}" placeholder="source"></label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Secours</legend>
+      <div class="form-grid">
+        <label class="field">Flux de secours<select name="fallbackMount" style="width:100%">
+          <option value="">Aucun</option>
+          ${others.map((o) => html`<option value="${o}" ${o === m.fallbackMount ? 'selected' : ''}>${o}</option>`)}
+        </select><span class="hint">Si la source coupe, les auditeurs basculent sur ce flux au lieu d'être déconnectés</span></label>
+        <div class="stack" style="gap:10px;justify-content:center">
+          <label class="check"><input type="checkbox" name="fallbackOverride" ${m.fallbackOverride ? 'checked' : ''}> Revenir automatiquement quand la source revient</label>
+          <label class="check"><input type="checkbox" name="fallbackWhenFull" ${m.fallbackWhenFull ? 'checked' : ''}> Envoyer vers le secours quand le flux est plein</label>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Relais</legend>
+      <div class="form-grid">
+        <label class="field full">Relayer un flux existant<input name="relayUrl" value="${m.relayUrl}" placeholder="http://autre-serveur:8000/flux (laisser vide pour une source normale)">
+          <span class="hint">Icecast récupère lui-même ce flux et le rediffuse sur ce point de montage</span></label>
+        <label class="check"><input type="checkbox" name="onDemand" ${m.onDemand ? 'checked' : ''}> Uniquement quand il y a des auditeurs (à la demande)</label>
+      </div>
+    </fieldset>
+    <div class="row">
+      <label class="check"><input type="checkbox" name="hidden" ${m.hidden ? 'checked' : ''}> Masquer de la page publique d'Icecast</label>
+      <label class="check"><input type="checkbox" name="public" ${m.public ? 'checked' : ''}> Publier dans l'annuaire Xiph</label>
+    </div>
+  </form>`;
+}
+
+export async function openMountEditor(id, prefillName) {
+  const { mounts } = await api('/mounts');
+  const existing = id ? mounts.find((m) => m.id === id) : null;
+  const m = existing || { ...EMPTY, name: prefillName || '/' };
+  const others = mounts.map((x) => x.name).filter((n) => n !== m.name);
+  return new Promise((resolve) => {
+    const { dlg, close } = modal({
+      title: existing ? `Modifier ${m.name}` : 'Nouveau point de montage',
+      body: mountForm(m, others),
+      footer: html`${existing ? html`<button class="btn danger" data-del style="margin-right:auto">${icon('trash')} Supprimer</button>` : ''}
+        <button class="btn" data-close>Annuler</button>
+        <button class="btn primary" form="mount-form">${existing ? 'Enregistrer' : 'Créer'}</button>`,
+    });
+    dlg.querySelector('[data-gen]').addEventListener('click', async () => {
+      const { password } = await api('/server/generate-password', { method: 'POST' });
+      dlg.querySelector('[name=password]').value = password;
+    });
+    dlg.querySelector('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = formData(e.target);
+      const btn = dlg.querySelector('.btn.primary');
+      await run(btn, () => api(existing ? `/mounts/${id}` : '/mounts', { method: existing ? 'PUT' : 'POST', body }),
+        existing ? 'Point de montage enregistré' : 'Point de montage créé');
+      close();
+      resolve(true);
+    });
+    dlg.querySelector('[data-del]')?.addEventListener('click', async () => {
+      if (!await confirmDialog('Supprimer ce point de montage ?', `Les réglages de ${m.name} seront supprimés. Les statistiques déjà enregistrées sont conservées.`, { confirm: 'Supprimer', danger: true })) return;
+      await run(null, () => api(`/mounts/${id}`, { method: 'DELETE' }), 'Point de montage supprimé');
+      close();
+      resolve(true);
+    });
+    dlg.addEventListener('close', () => resolve(false));
+  });
+}
+
+export async function openConnection(name) {
+  const { mounts, connection: c } = await api('/mounts');
+  const m = mounts.find((x) => x.name === name) || { name };
+  const user = m.password ? m.username || 'source' : 'source';
+  const pass = m.password || c.sourcePassword;
+  const base = c.managed ? `http://${c.host}:${c.port}` : c.apiUrl.replace(/\/+$/, '');
+  const host = base.replace(/^https?:\/\//, '').split(':')[0];
+  const port = base.split(':')[2] || c.port;
+  const listen = `${base}${m.name}`;
+  const embed = `<audio controls preload="none" src="${listen}"></audio>`;
+  modal({
+    title: `Connexion à ${m.name}`,
+    wide: true,
+    body: html`
+      <div class="grid cols-2">
+        <div>
+          <h3>Pour votre logiciel de diffusion</h3>
+          <p class="muted small">BUTT, Mixxx, RadioBOSS, VestaLive, OBS, Liquidsoap… choisissez le type de serveur <b>Icecast 2</b>.</p>
+          <dl class="kv">
+            <dt>Type de serveur</dt><dd>Icecast 2</dd>
+            <dt>Adresse (hôte)</dt><dd>${copyable(host)}</dd>
+            <dt>Port</dt><dd>${copyable(String(port))}</dd>
+            <dt>Point de montage</dt><dd>${copyable(m.name)}</dd>
+            <dt>Utilisateur</dt><dd>${copyable(user)}</dd>
+            <dt>Mot de passe</dt><dd>${secret(pass)}</dd>
+          </dl>
+          <p class="dim small">${m.password ? 'Ce flux a son propre mot de passe.' : 'Mot de passe source global (réglable sur la page Serveur).'}
+          Si l'encodeur est sur un autre ordinateur, remplacez l'adresse par l'IP de ce PC.</p>
+        </div>
+        <div>
+          <h3>Pour vos auditeurs</h3>
+          <dl class="kv mt">
+            <dt>Lien direct</dt><dd>${copyable(listen)}</dd>
+            <dt>Playlist M3U</dt><dd>${copyable(`${listen}.m3u`)}</dd>
+            <dt>Playlist XSPF</dt><dd>${copyable(`${listen}.xspf`)}</dd>
+            <dt>Infos JSON</dt><dd>${copyable(`${base}/status-json.xsl?mount=${m.name}`)}</dd>
+          </dl>
+          <h3 class="mt">Lecteur à intégrer sur votre site</h3>
+          <div class="row mt"><textarea rows="3" readonly>${embed}</textarea></div>
+          <button class="btn sm mt" data-copy="${embed}">${icon('copy')} Copier le code</button>
+        </div>
+      </div>`,
+  });
+}
+
+export function bindMountActions(root, reload) {
+  root.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const { act, name, id } = b.dataset;
+    if (act === 'details') openConnection(name);
+    if (act === 'edit' && await openMountEditor(id)) reload();
+    if (act === 'configure' && await openMountEditor(null, name)) reload();
+    if (act === 'metadata') {
+      const card = b.closest('[data-mount-card]');
+      const current = card?.querySelector('.np-title')?.textContent || '';
+      const song = await promptDialog(`Titre en cours sur ${name}`, 'Artiste - Titre', current === 'Titre non renseigné' ? '' : current, { confirm: 'Mettre à jour' });
+      if (song) await run(null, () => api('/mounts/metadata', { method: 'POST', body: { mount: name, song } }), 'Titre mis à jour');
+    }
+    if (act === 'kill') {
+      if (!await confirmDialog('Couper la source ?', `L'encodeur connecté sur ${name} sera déconnecté. Il risque de se reconnecter automatiquement s'il est configuré pour.`, { confirm: 'Couper', danger: true })) return;
+      await run(null, () => api('/mounts/kill-source', { method: 'POST', body: { mount: name } }), 'Source coupée');
+    }
+  });
+}
+
+export default function mountsPage(view, { store, onLive, topbar }) {
+  let data = null;
+  topbar.innerHTML = String(html`<button class="btn primary" id="new-mount">${icon('plus')} Nouveau point de montage</button>`);
+  $('#new-mount', topbar).addEventListener('click', async () => {
+    if (await openMountEditor()) load();
+  });
+
+  function render() {
+    if (!data) return;
+    const liveMounts = store.live?.mounts;
+    const live = new Map((liveMounts || []).map((m) => [m.mount, m]));
+    const list = data.mounts.filter((m) => m.configured)
+      .map((m) => ({ ...m, live: liveMounts ? live.get(m.name) || null : m.live }));
+    for (const [name, l] of live) if (!list.some((m) => m.name === name)) list.push({ id: null, name, configured: false, live: l });
+    const onAir = list.filter((m) => m.live).length;
+    view.innerHTML = String(html`
+      <p class="muted" style="margin-top:-8px">${fmtNum(list.length)} point(s) de montage · ${fmtNum(onAir)} en direct.
+        Une source qui se connecte avec le mot de passe global sur un nouveau chemin crée aussi un flux à la volée.</p>
+      <div class="grid mounts">${list.map((m) => mountCard(m))}</div>
+      ${list.some((m) => !m.configured) ? html`<p class="dim small mt">Les flux « non configurés » utilisent les réglages par défaut.
+        Cliquez sur <b>Configurer</b> pour leur donner un nom, une limite d'auditeurs, un flux de secours…</p>` : ''}`);
+  }
+
+  async function load() {
+    data = await api('/mounts');
+    render();
+  }
+
+  bindMountActions(view, load);
+  load();
+  let lastKey = '';
+  return onLive(() => {
+    const key = JSON.stringify((store.live?.mounts || []).map((m) => [m.mount, m.listeners, m.title, m.peak]));
+    if (key !== lastKey) {
+      lastKey = key;
+      render();
+    }
+  });
+}
