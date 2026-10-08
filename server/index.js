@@ -14,8 +14,9 @@ import { authRoutes, requireAuth, changePassword } from './auth.js';
 import { relayStream, playlist, relayCount } from './streamproxy.js';
 import { updateStatus, requestUpdate } from './update.js';
 import { brandingRoutes } from './branding.js';
-import { AutoDJ } from './autodj/engine.js';
-import { autodjRoutes, autodjConfig } from './autodj/routes.js';
+import { AutoDJManager } from './autodj/manager.js';
+import { autodjRoutes } from './autodj/routes.js';
+import { migrateStations, stationsUsingMount, updateStation, setEnabled } from './autodj/stations.js';
 
 const settings = loadSettings();
 const ice = () => getSettings().icecast;
@@ -23,8 +24,9 @@ const proc = new IcecastProcess(ice, (level, type, msg) => logEvent(level, type,
 // Tant qu'Icecast n'a pas été redémarré, on l'interroge avec les réglages qu'il utilise réellement
 const api = new IcecastApi(() => (ice().managed && proc.state === 'running' && proc.applied) || ice());
 const collector = new Collector({ api, proc, getSettings });
-const autodj = new AutoDJ({
-  getConfig: autodjConfig,
+// L'AutoDJ unique des versions précédentes devient la première station
+migrateStations(settings.autodj, `${settings.branding?.name || 'Radio'} AutoDJ`);
+const autodj = new AutoDJManager({
   // réglages avec lesquels Icecast tourne réellement (port, mots de passe des flux)
   getIcecast: () => (proc.state === 'running' && proc.applied) || ice(),
   api,
@@ -239,10 +241,16 @@ app.delete('/api/mounts/:id', wrap(async (req) => {
     // Les flux qui l'utilisaient comme secours n'en ont plus
     for (const x of s.icecast.mounts) if (x.fallbackMount === m.name) x.fallbackMount = '';
   });
-  // L'AutoDJ diffusait sur ce flux : on l'arrête
-  if (autodjConfig().mount === m.name && autodj.encoder) {
-    updateSettings((s) => { s.autodj = { ...autodjConfig(), enabled: false }; });
-    await autodj.stop();
+  // Une station AutoDJ diffusait sur ce flux : il est retiré de ses sorties (et la station s'arrête s'il n'en reste aucune)
+  for (const st of stationsUsingMount(m.name)) {
+    const outputs = st.outputs.filter((o) => o.mount !== m.name);
+    if (outputs.length) {
+      updateStation(st.id, { outputs });
+      await autodj.restart(st.id);
+    } else {
+      setEnabled(st.id, false);
+      await autodj.player(st.id).stop();
+    }
   }
   // Un encodeur encore connecté est déconnecté
   if (collector.live.mounts.some((l) => l.mount === m.name)) await api.killSource(m.name).catch(() => {});
@@ -461,7 +469,7 @@ const server = app.listen(port, host, async () => {
   logEvent('info', 'dashboard', 'Dashboard démarré');
   await proc.init().catch((err) => console.error(err.message));
   collector.start();
-  if (autodjConfig().enabled) autodj.start().catch((err) => console.error('AutoDJ :', err.message));
+  autodj.startEnabled().catch((err) => console.error('AutoDJ :', err.message));
 });
 server.on('error', (err) => {
   console.error(`Impossible d'écouter sur ${host}:${port} : ${err.message}`);

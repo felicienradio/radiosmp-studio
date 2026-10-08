@@ -1,18 +1,46 @@
-// Routes de l'API AutoDJ : bibliothèque, playlists, grille horaire, pilotage.
+// Routes de l'API AutoDJ : bibliothèque, playlists, stations (flux de sortie, playlists, grille), pilotage.
 import crypto from 'node:crypto';
 import { getSettings, updateSettings, randomPassword } from '../settings.js';
 import * as lib from './library.js';
 import * as pl from './playlists.js';
+import * as st from './stations.js';
 import { AUTODJ_DEFAULTS } from './engine.js';
 
 export function autodjConfig() {
   return { ...AUTODJ_DEFAULTS, ...(getSettings().autodj || {}) };
 }
 
+/** Points de montage Icecast à créer ou régler pour une station (flux de sortie et secours du direct). */
+function prepareMounts(station) {
+  updateSettings((s) => {
+    const mounts = s.icecast.mounts;
+    const base = (name) => ({
+      id: crypto.randomUUID(), name, streamName: '', description: '', genre: '', url: '', maxListeners: 0,
+      username: 'source', password: randomPassword(), fallbackMount: '', fallbackOverride: true, fallbackWhenFull: false,
+      hidden: false, public: false, relayUrl: '', onDemand: false, startMode: 'lowlatency',
+    });
+    for (const o of station.outputs) {
+      if (mounts.some((m) => m.name === o.mount)) continue;
+      // Avec un flux direct, la sortie de l'AutoDJ sert de secours : on la masque de la page publique d'Icecast
+      mounts.push({ ...base(o.mount), streamName: station.name, description: 'Diffusion automatique', hidden: !!station.liveMount, startMode: 'instant' });
+    }
+    if (station.liveMount) {
+      let live = mounts.find((m) => m.name === station.liveMount);
+      if (!live) {
+        live = { ...base(station.liveMount), streamName: s.branding?.name || station.name };
+        mounts.push(live);
+      }
+      live.fallbackMount = station.outputs[0].mount;
+      live.fallbackOverride = true;
+    }
+  });
+}
+
 export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   // ---------- Bibliothèque ----------
   app.get('/api/autodj/media', wrap((req) => ({
     items: lib.listMedia(String(req.query.q || '')), stats: lib.libraryStats(), analysing: lib.analysisPending(),
+    autoCue: autodjConfig().autoCue !== false,
   })));
   app.post('/api/autodj/media', wrap(async (req) => {
     const m = await lib.importUpload(req);
@@ -26,12 +54,12 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   app.get('/api/autodj/media/:id/waveform', wrap((req) => lib.mediaWaveform(req.params.id)));
   app.put('/api/autodj/media/:id/cues', wrap((req) => {
     const m = lib.setCues(req.params.id, req.body || {});
-    autodj.resetUpcoming();
+    autodj.resetAll();
     return m;
   }));
   app.post('/api/autodj/media/:id/autocue', wrap(async (req) => {
     const m = await lib.autoCue(req.params.id, { force: true });
-    autodj.resetUpcoming();
+    autodj.resetAll();
     return m;
   }));
   // Analyse de toute la bibliothèque : les titres réglés à la main ne sont pas modifiés (sauf force)
@@ -44,7 +72,7 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   app.put('/api/autodj/media/:id', wrap((req) => lib.updateMedia(req.params.id, req.body || {})));
   app.delete('/api/autodj/media/:id', wrap((req) => {
     lib.deleteMedia(req.params.id);
-    autodj.resetUpcoming();
+    autodj.resetAll();
   }));
   app.get('/api/autodj/media/:id/audio', (req, res) => {
     const m = lib.getMedia(req.params.id);
@@ -58,118 +86,126 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
   app.get('/api/autodj/playlists/:id', wrap((req) => pl.getPlaylist(req.params.id) || Promise.reject(lib.fail('Playlist introuvable', 404))));
   app.put('/api/autodj/playlists/:id', wrap((req) => {
     const p = pl.updatePlaylist(req.params.id, req.body || {});
-    autodj.resetUpcoming();
+    autodj.resetAll();
     return p;
   }));
   app.delete('/api/autodj/playlists/:id', wrap((req) => {
     pl.deletePlaylist(req.params.id);
-    const id = Number(req.params.id);
-    updateSettings((s) => {
-      const a = { ...AUTODJ_DEFAULTS, ...(s.autodj || {}) };
-      if (a.defaultPlaylist === id) a.defaultPlaylist = null;
-      if (a.jinglePlaylist === id) a.jinglePlaylist = null;
-      s.autodj = a;
-    });
-    autodj.resetUpcoming();
+    autodj.resetAll();
   }));
   app.put('/api/autodj/playlists/:id/items', wrap((req) => {
     const p = pl.setItems(req.params.id, req.body?.mediaIds);
-    autodj.resetUpcoming();
+    autodj.resetAll();
     return p;
   }));
   app.post('/api/autodj/playlists/:id/items', wrap((req) => {
     const p = pl.addItems(req.params.id, req.body?.mediaIds);
-    autodj.resetUpcoming();
+    autodj.resetAll();
     return p;
   }));
 
-  // ---------- Grille horaire ----------
-  app.get('/api/autodj/schedule', wrap(() => pl.listSchedule()));
-  app.post('/api/autodj/schedule', wrap((req) => { const r = pl.createRule(req.body || {}); autodj.resetUpcoming(); return r; }));
-  app.put('/api/autodj/schedule/:id', wrap((req) => { const r = pl.updateRule(req.params.id, req.body || {}); autodj.resetUpcoming(); return r; }));
-  app.delete('/api/autodj/schedule/:id', wrap((req) => { const r = pl.deleteRule(req.params.id); autodj.resetUpcoming(); return r; }));
+  // ---------- Stations ----------
+  app.get('/api/autodj', wrap(() => ({ ...autodj.status(), autoCue: autodjConfig().autoCue !== false })));
 
-  // ---------- Pilotage ----------
-  app.get('/api/autodj', wrap(() => autodj.status()));
+  // Réglages communs (points cue automatiques)
+  app.put('/api/autodj/settings', wrap((req) => {
+    if ('autoCue' in (req.body || {})) updateSettings((s) => { s.autodj = { ...autodjConfig(), autoCue: !!req.body.autoCue }; });
+    return { autoCue: autodjConfig().autoCue !== false };
+  }));
 
-  app.put('/api/autodj/settings', wrap(async (req) => {
+  app.post('/api/autodj/stations', wrap((req) => {
     const b = req.body || {};
-    const before = autodjConfig();
-    const next = { ...before };
-    if ('mount' in b) {
-      let m = String(b.mount || '').trim();
-      if (!m.startsWith('/')) m = `/${m}`;
-      if (!/^\/[A-Za-z0-9._\-/]+$/.test(m)) throw lib.fail('Point de montage invalide');
-      next.mount = m;
-    }
-    if ('liveMount' in b) next.liveMount = String(b.liveMount || '/live').trim() || '/live';
-    if ('format' in b) next.format = b.format === 'aac' ? 'aac' : 'mp3';
-    if ('bitrate' in b) {
-      const br = Number(b.bitrate);
-      if (![64, 96, 128, 160, 192, 256, 320].includes(br)) throw lib.fail('Débit invalide');
-      next.bitrate = br;
-    }
-    for (const k of ['defaultPlaylist', 'jinglePlaylist']) {
-      if (k in b) next[k] = b[k] ? Number(b[k]) : null;
-    }
-    for (const k of ['crossfade', 'autoCue']) if (k in b) next[k] = !!b[k];
-    if ('jingleEvery' in b) next.jingleEvery = Math.max(0, Math.min(50, Math.floor(Number(b.jingleEvery) || 0)));
-    updateSettings((s) => { s.autodj = next; });
-    autodj.resetUpcoming();
-    // Changement de point de montage ou de format : on relance l'encodeur
-    if (autodj.encoder && (before.mount !== next.mount || before.format !== next.format || before.bitrate !== next.bitrate)) {
-      await autodj.stop();
-      await autodj.start();
-    }
-    return autodj.status();
+    const n = st.listStations().length + 1;
+    const s = st.createStation({
+      name: b.name || `AutoDJ ${n}`,
+      outputs: b.outputs || [{ mount: `/autodj${n}`, format: 'mp3', bitrate: 128 }],
+      liveMount: b.liveMount || '',
+      crossfade: b.crossfade !== false,
+    });
+    logEvent('info', 'autodj', `Station AutoDJ « ${s.name} » créée`);
+    autodj.emit('change');
+    return autodj.player(s.id).status();
+  }));
+
+  app.put('/api/autodj/stations/:id', wrap(async (req) => {
+    const before = st.getStation(req.params.id);
+    const s = st.updateStation(req.params.id, req.body || {});
+    autodj.player(s.id).resetUpcoming();
+    // Flux de sortie modifiés : on relance l'encodeur
+    if (JSON.stringify(before.outputs) !== JSON.stringify(s.outputs)) await autodj.restart(s.id);
+    return autodj.player(s.id).status();
+  }));
+
+  app.delete('/api/autodj/stations/:id', wrap(async (req) => {
+    const s = st.getStation(req.params.id);
+    if (!s) throw lib.fail('Station introuvable', 404);
+    await autodj.remove(s.id);
+    st.deleteStation(s.id);
+    logEvent('info', 'autodj', `Station AutoDJ « ${s.name} » supprimée`);
+    autodj.emit('change');
+  }));
+
+  // Playlists de la station : [{ playlistId, mode: rotation|tracks|minutes, weight, every }]
+  app.put('/api/autodj/stations/:id/playlists', wrap((req) => {
+    st.setLinks(req.params.id, req.body?.links);
+    const p = autodj.player(req.params.id);
+    p.resetUpcoming();
+    return p.status();
   }));
 
   /**
-   * Prépare Icecast pour l'AutoDJ : point de montage dédié (démarrage instantané) et flux de secours du direct.
-   * Un animateur qui se connecte sur le flux direct prend l'antenne ; l'AutoDJ reprend quand il coupe.
+   * Prépare Icecast pour la station : points de montage des flux de sortie (démarrage instantané) et,
+   * s'il y a un flux direct, l'AutoDJ comme secours : un animateur qui s'y connecte prend l'antenne,
+   * l'AutoDJ reprend quand il coupe.
    */
-  app.post('/api/autodj/setup', wrap(() => {
-    const a = autodjConfig();
-    updateSettings((s) => {
-      const mounts = s.icecast.mounts;
-      let auto = mounts.find((m) => m.name === a.mount);
-      if (!auto) {
-        auto = {
-          id: crypto.randomUUID(), name: a.mount, streamName: `${s.branding?.name || 'Radio'} AutoDJ`, description: 'Diffusion automatique',
-          genre: '', url: '', maxListeners: 0, username: 'source', password: randomPassword(), fallbackMount: '',
-          fallbackOverride: true, fallbackWhenFull: false, hidden: true, public: false, relayUrl: '', onDemand: false, startMode: 'instant',
-        };
-        mounts.push(auto);
-      }
-      let live = mounts.find((m) => m.name === a.liveMount);
-      if (!live) {
-        live = {
-          id: crypto.randomUUID(), name: a.liveMount, streamName: s.branding?.name || 'Radio', description: '', genre: '', url: '',
-          maxListeners: 0, username: 'source', password: randomPassword(), fallbackMount: '', fallbackOverride: true,
-          fallbackWhenFull: false, hidden: false, public: false, relayUrl: '', onDemand: false, startMode: 'lowlatency',
-        };
-        mounts.push(live);
-      }
-      live.fallbackMount = a.mount;
-      live.fallbackOverride = true;
-    });
-    logEvent('info', 'autodj', `AutoDJ configuré comme secours de ${a.liveMount}`);
-    return { ...autodj.status(), process: proc.status() };
+  app.post('/api/autodj/stations/:id/setup', wrap((req) => {
+    const s = st.getStation(req.params.id);
+    if (!s) throw lib.fail('Station introuvable', 404);
+    prepareMounts(s);
+    logEvent('info', 'autodj', `${s.name} : flux ${s.outputs.map((o) => o.mount).join(', ')} configurés${s.liveMount ? `, secours de ${s.liveMount}` : ''}`);
+    return { ...autodj.player(s.id).status(), process: proc.status() };
   }));
 
-  app.post('/api/autodj/start', wrap(async () => {
-    updateSettings((s) => { s.autodj = { ...autodjConfig(), enabled: true }; });
-    await autodj.start();
-    return autodj.status();
+  app.post('/api/autodj/stations/:id/start', wrap(async (req) => {
+    const p = autodj.player(req.params.id);
+    st.setEnabled(p.stationId, true);
+    await p.start();
+    return p.status();
   }));
-  app.post('/api/autodj/stop', wrap(async () => {
-    updateSettings((s) => { s.autodj = { ...autodjConfig(), enabled: false }; });
-    await autodj.stop();
-    return autodj.status();
+  app.post('/api/autodj/stations/:id/stop', wrap(async (req) => {
+    const p = autodj.player(req.params.id);
+    st.setEnabled(p.stationId, false);
+    await p.stop();
+    return p.status();
   }));
-  app.post('/api/autodj/skip', wrap(() => { autodj.skip(); return autodj.status(); }));
-  app.post('/api/autodj/queue', wrap((req) => { autodj.enqueue(req.body?.mediaId); return autodj.status(); }));
-  app.delete('/api/autodj/queue/:index', wrap((req) => { autodj.dequeue(req.params.index); return autodj.status(); }));
+  app.post('/api/autodj/stations/:id/skip', wrap((req) => {
+    const p = autodj.player(req.params.id);
+    p.skip();
+    return p.status();
+  }));
+  app.post('/api/autodj/stations/:id/queue', wrap((req) => {
+    const p = autodj.player(req.params.id);
+    p.enqueue(req.body?.mediaId);
+    return p.status();
+  }));
+  app.delete('/api/autodj/stations/:id/queue/:index', wrap((req) => {
+    const p = autodj.player(req.params.id);
+    p.dequeue(req.params.index);
+    return p.status();
+  }));
+
+  // ---------- Grille horaire (par station) ----------
+  app.get('/api/autodj/stations/:id/schedule', wrap((req) => st.listSchedule(req.params.id)));
+  app.post('/api/autodj/stations/:id/schedule', wrap((req) => {
+    const r = st.createRule(req.params.id, req.body || {});
+    autodj.player(req.params.id).resetUpcoming();
+    return r;
+  }));
+  app.delete('/api/autodj/schedule/:id', wrap((req) => {
+    const r = st.deleteRule(req.params.id);
+    autodj.resetAll();
+    return r;
+  }));
 
   // Titres jamais analysés (bibliothèque d'avant les points cue) : analyse en tâche de fond après le démarrage
   setTimeout(() => {

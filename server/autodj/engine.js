@@ -1,7 +1,7 @@
-// Moteur de l'AutoDJ.
+// Moteur d'une station AutoDJ.
 //
 // Un encodeur ffmpeg permanent lit de l'audio brut (PCM 44,1 kHz stéréo) sur son entrée, au rythme réel (-re),
-// et le diffuse vers le point de montage de l'AutoDJ. Chaque titre est lu par une « platine » : un ffmpeg qui
+// et le diffuse vers les flux de sortie de la station (un format et un débit par flux). Chaque titre est lu par une « platine » : un ffmpeg qui
 // décode le fichier entre son cue in et son cue out. Le mélangeur additionne les platines actives avec leurs fondus :
 // au point d'enchaînement (mix) d'un titre, le suivant démarre par-dessus sa fin. Sans rien à jouer, il envoie du
 // silence pour garder la connexion avec Icecast.
@@ -9,7 +9,8 @@ import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { getMedia, mediaPath, markPlayed, displayTitle, cuesOf } from './library.js';
-import { getPlaylist, playlistMediaIds, activeRule } from './playlists.js';
+import { getPlaylist } from './playlists.js';
+import { activeRule } from './stations.js';
 
 const RATE = 44100;
 const FRAME = 4; // 16 bits x 2 canaux
@@ -18,18 +19,12 @@ const CHUNK = RATE / 20; // le mélangeur avance par blocs de 50 ms
 const PREROLL = 4; // s : la platine suivante se prépare 4 s avant son départ
 const SKIP_FADE = 1.5; // s : fondu de sortie quand on passe un titre
 
+// Réglages communs à toutes les stations
 export const AUTODJ_DEFAULTS = {
-  enabled: false,
-  mount: '/autodj',
-  format: 'mp3',
-  bitrate: 320,
-  defaultPlaylist: null,
-  jinglePlaylist: null,
-  jingleEvery: 4,
-  liveMount: '/live',
-  crossfade: true, // enchaînements aux points de mix (sinon les titres se suivent sans se chevaucher)
   autoCue: true, // points cue détectés automatiquement à l'import
 };
+
+const insertSource = (link) => (link.kind === 'jingle' ? 'jingle' : 'insert');
 
 export function ffmpegAvailable() {
   return new Promise((resolve) => {
@@ -151,14 +146,15 @@ class Deck {
 export class AutoDJ extends EventEmitter {
   /**
    * @param {object} o
-   * @param {() => object} o.getConfig   réglages de l'AutoDJ
+   * @param {number} o.stationId
+   * @param {() => object} o.getStation  station (flux de sortie, playlists, enchaînements) lue en base
    * @param {() => object} o.getIcecast  réglages Icecast en vigueur (port, mots de passe, flux)
    * @param {object} o.api               client IcecastApi (mise à jour du titre)
    * @param {(level, type, msg) => void} o.log
    */
-  constructor({ getConfig, getIcecast, api, log }) {
+  constructor({ stationId, getStation, getIcecast, api, log }) {
     super();
-    Object.assign(this, { getConfig, getIcecast, api, log });
+    Object.assign(this, { stationId, getStation, getIcecast, api, log });
     this.state = 'stopped';
     this.encoder = null;
     this.decks = []; // platines en cours de lecture (plusieurs pendant un enchaînement)
@@ -170,20 +166,28 @@ export class AutoDJ extends EventEmitter {
     this.history = [];
     this.cycles = new Map(); // playlist -> titres pas encore joués dans le cycle aléatoire
     this.cursors = new Map(); // playlist -> position en ordre fixe
-    this.sinceJingle = 0;
+    this.counters = new Map(); // playlist « tous les N titres » -> titres joués depuis son dernier passage
+    this.lastInsert = new Map(); // playlist « toutes les N minutes » -> heure de son dernier passage
+    this.startedAt = Date.now();
     this.lastError = null;
     this.restarts = [];
     this.lastEmpty = 0; // dernière fois qu'il n'y avait rien à jouer
     this.ffmpeg = null;
   }
 
+  /** Station lue en base (valeurs vides si elle vient d'être supprimée). */
+  station() {
+    return this.getStation() || { id: this.stationId, name: '', enabled: false, outputs: [], liveMount: '', crossfade: true, links: [] };
+  }
+
   status() {
-    const c = this.getConfig();
-    const rule = activeRule();
-    const playlistId = rule?.playlist_id ?? c.defaultPlaylist;
+    const st = this.station();
+    const rule = activeRule(st.id);
     this.fillUpcoming();
+    const label = (u) => (u.playlistId ? getPlaylist(u.playlistId)?.name : null);
     return {
-      ...c,
+      ...st,
+      mount: st.outputs[0]?.mount || null,
       state: this.state,
       ffmpeg: this.ffmpeg,
       lastError: this.lastError,
@@ -192,15 +196,15 @@ export class AutoDJ extends EventEmitter {
         title: displayTitle(this.current.media),
         startedAt: this.current.startedAt,
         source: this.current.source,
+        playlist: this.current.playlist,
         duration: this.current.duration,
         mixAt: this.current.mixAt,
       },
       queue: this.queue.map((id) => getMedia(id)).filter(Boolean),
       upcoming: [...(this.nextDeck ? [this.nextDeck.item] : []), ...this.upcoming].slice(0, 8)
-        .map((u) => ({ ...getMedia(u.id), source: u.source })).filter((m) => m.id),
+        .map((u) => ({ ...getMedia(u.id), source: u.source, playlist: label(u) })).filter((m) => m.id),
       history: this.history.slice(0, 15),
       activeRule: rule,
-      activePlaylist: playlistId ? getPlaylist(playlistId) && { id: playlistId, name: getPlaylist(playlistId).name } : null,
     };
   }
 
@@ -230,36 +234,61 @@ export class AutoDJ extends EventEmitter {
     return ids[pos];
   }
 
-  /** Prépare les prochains titres (pour les afficher dans « À suivre »). */
+  /** Tirage pondéré parmi les playlists en rotation (poids 1 à 10, comme AzuraCast). */
+  pickRotation(links) {
+    const total = links.reduce((n, l) => n + l.weight, 0);
+    let r = Math.random() * total;
+    for (const l of links) {
+      r -= l.weight;
+      if (r < 0) return l;
+    }
+    return links[links.length - 1] || null;
+  }
+
+  /**
+   * Prépare les prochains titres (affichés dans « À suivre ») :
+   * insertions « une fois tous les N titres », puis la playlist du créneau de la grille ou, hors créneau,
+   * une playlist en rotation tirée selon son poids.
+   */
   fillUpcoming() {
-    const c = this.getConfig();
+    const st = this.station();
+    const links = st.links.filter((l) => l.count > 0);
     let guard = 0;
     while (this.upcoming.length < 5 && guard++ < 20) {
-      const jingles = c.jinglePlaylist ? playlistMediaIds(c.jinglePlaylist) : [];
-      const jingleDue = jingles.length && c.jingleEvery > 0 && this.sinceJingle >= c.jingleEvery;
-      if (jingleDue) {
-        const id = this.pickFrom(c.jinglePlaylist);
+      const due = links.find((l) => l.mode === 'tracks' && (this.counters.get(l.playlist_id) || 0) >= l.every);
+      if (due) {
+        this.counters.set(due.playlist_id, 0);
+        const id = this.pickFrom(due.playlist_id);
         if (id) {
-          this.upcoming.push({ id, source: 'jingle' });
-          this.sinceJingle = 0;
+          this.upcoming.push({ id, source: insertSource(due), playlistId: due.playlist_id });
           continue;
         }
       }
-      const rule = activeRule();
-      const playlistId = rule?.playlist_id ?? c.defaultPlaylist;
+      const rule = activeRule(st.id);
+      const playlistId = rule ? rule.playlist_id : this.pickRotation(links.filter((l) => l.mode === 'rotation'))?.playlist_id;
       const id = playlistId ? this.pickFrom(playlistId) : null;
       if (!id) break;
-      this.upcoming.push({ id, source: rule ? 'grille' : 'playlist', playlistId });
-      this.sinceJingle += 1;
+      this.upcoming.push({ id, source: rule ? 'grille' : 'playlist', playlistId, ruleId: rule?.id ?? null });
+      for (const l of links) if (l.mode === 'tracks') this.counters.set(l.playlist_id, (this.counters.get(l.playlist_id) || 0) + 1);
     }
   }
 
   next() {
     if (this.queue.length) return { id: this.queue.shift(), source: 'demande' };
-    // La grille a peut-être changé de playlist depuis la préparation : on repart de la playlist active
-    const rule = activeRule();
-    const playlistId = rule?.playlist_id ?? this.getConfig().defaultPlaylist;
-    if (this.upcoming.length && this.upcoming[0].source !== 'jingle' && this.upcoming[0].playlistId !== playlistId) this.upcoming = [];
+    const st = this.station();
+    // Insertions « une fois toutes les N minutes » (flash, identifiant de la station…)
+    const now = Date.now();
+    for (const l of st.links) {
+      if (l.mode !== 'minutes' || !l.count) continue;
+      if (now - (this.lastInsert.get(l.playlist_id) ?? this.startedAt) < l.every * 60_000) continue;
+      this.lastInsert.set(l.playlist_id, now);
+      const id = this.pickFrom(l.playlist_id);
+      if (id) return { id, source: insertSource(l), playlistId: l.playlist_id };
+    }
+    // La grille a peut-être changé de créneau depuis la préparation : on repart de la bonne playlist
+    const rule = activeRule(st.id);
+    const head = this.upcoming[0];
+    if (head && ['playlist', 'grille'].includes(head.source) && (head.ruleId ?? null) !== (rule?.id ?? null)) this.upcoming = [];
     this.fillUpcoming();
     return this.upcoming.shift() || null;
   }
@@ -267,31 +296,39 @@ export class AutoDJ extends EventEmitter {
   // ---------- Diffusion ----------
 
   async start() {
-    const c = this.getConfig();
+    const st = this.station();
     if (this.encoder) return;
+    if (!st.outputs.length) {
+      this.setError('Aucun flux de sortie : ajoutez-en un dans les réglages de la station');
+      return;
+    }
     this.ffmpeg = await ffmpegAvailable();
     if (!this.ffmpeg) {
       this.setError('ffmpeg est introuvable : installez-le (apt install ffmpeg) pour utiliser l\'AutoDJ');
       return;
     }
     const ice = this.getIcecast();
-    const mount = ice.mounts.find((m) => m.name === c.mount);
-    const user = mount?.password ? mount.username || 'source' : 'source';
-    const password = mount?.password || ice.sourcePassword;
-    const codec = c.format === 'aac'
-      ? ['-c:a', 'aac', '-b:a', `${c.bitrate}k`, '-content_type', 'audio/aac', '-f', 'adts']
-      : ['-c:a', 'libmp3lame', '-b:a', `${c.bitrate}k`, '-content_type', 'audio/mpeg', '-f', 'mp3'];
-    const target = `icecast://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${ice.port}${c.mount}`;
+    // Un seul encodeur, une sortie par flux (chacune avec son format, son débit et son mot de passe)
+    const outputs = st.outputs.flatMap((o) => {
+      const mount = ice.mounts.find((m) => m.name === o.mount);
+      const user = mount?.password ? mount.username || 'source' : 'source';
+      const password = mount?.password || ice.sourcePassword;
+      const codec = o.format === 'aac'
+        ? ['-c:a', 'aac', '-b:a', `${o.bitrate}k`, '-content_type', 'audio/aac', '-f', 'adts']
+        : ['-c:a', 'libmp3lame', '-b:a', `${o.bitrate}k`, '-content_type', 'audio/mpeg', '-f', 'mp3'];
+      return [...codec,
+        '-ice_name', mount?.streamName || st.name, '-ice_genre', mount?.genre || '', '-ice_description', mount?.description || '',
+        '-ice_public', '0', `icecast://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${ice.port}${o.mount}`];
+    });
 
     this.state = 'starting';
     this.lastError = null;
+    this.startedAt = Date.now();
     this.changed();
     const enc = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error', '-re',
       '-f', 's16le', '-ar', String(RATE), '-ac', '2', '-i', 'pipe:0',
-      ...codec,
-      '-ice_name', mount?.streamName || 'AutoDJ', '-ice_genre', mount?.genre || '', '-ice_description', mount?.description || '',
-      '-ice_public', '0', target,
+      ...outputs,
     ], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
     this.encoder = enc;
     let stderr = '';
@@ -301,8 +338,7 @@ export class AutoDJ extends EventEmitter {
       if (this.encoder !== enc) return;
       this.encoder = null;
       this.killDecks();
-      const wanted = this.getConfig().enabled;
-      if (this.state !== 'stopping' && wanted) {
+      if (this.state !== 'stopping' && this.station().enabled) {
         const why = stderr.trim().split('\n').pop() || `code ${code}`;
         this.setError(`L'encodeur s'est arrêté : ${why}`);
         this.scheduleRestart();
@@ -314,7 +350,7 @@ export class AutoDJ extends EventEmitter {
     });
 
     this.state = 'playing';
-    this.log('info', 'autodj', `AutoDJ démarré sur ${c.mount} (${c.format.toUpperCase()} ${c.bitrate} kbps)`);
+    this.log('info', 'autodj', `${st.name} : AutoDJ démarré sur ${st.outputs.map((o) => `${o.mount} (${o.format.toUpperCase()} ${o.bitrate} kbps)`).join(', ')}`);
     this.pump(enc).catch((err) => this.log('error', 'autodj', `Mélangeur : ${err.message}`));
   }
 
@@ -322,18 +358,18 @@ export class AutoDJ extends EventEmitter {
     const now = Date.now();
     this.restarts = this.restarts.filter((t) => now - t < 5 * 60_000);
     if (this.restarts.length >= 10) {
-      this.log('error', 'autodj', 'AutoDJ : trop d\'échecs, redémarrage automatique suspendu');
+      this.log('error', 'autodj', `${this.station().name} : trop d'échecs, redémarrage automatique suspendu`);
       return;
     }
     this.restarts.push(now);
     clearTimeout(this.restartTimer);
-    this.restartTimer = setTimeout(() => { if (this.getConfig().enabled) this.start(); }, 5000);
+    this.restartTimer = setTimeout(() => { if (this.station().enabled) this.start(); }, 5000);
   }
 
   setError(message) {
     this.state = 'error';
     this.lastError = message;
-    this.log('error', 'autodj', message);
+    this.log('error', 'autodj', `${this.station().name} : ${message}`);
     this.changed();
   }
 
@@ -350,7 +386,7 @@ export class AutoDJ extends EventEmitter {
         this.log('warning', 'autodj', `Fichier introuvable : ${displayTitle(media)}`);
         continue;
       }
-      this.nextDeck = new Deck(media, item, { crossfade: this.getConfig().crossfade !== false });
+      this.nextDeck = new Deck(media, item, { crossfade: this.station().crossfade !== false });
       return this.nextDeck;
     }
     this.lastEmpty = Date.now();
@@ -364,17 +400,22 @@ export class AutoDJ extends EventEmitter {
     this.main = d;
     const { media, item } = d;
     const sec = (x) => (Number.isFinite(x) ? Math.round((x / RATE) * 100) / 100 : media.duration || 0);
-    this.current = { media, startedAt: Date.now(), source: item.source, duration: sec(d.length), mixAt: sec(d.mixAt) };
+    this.current = {
+      media, startedAt: Date.now(), source: item.source, playlist: item.playlistId ? getPlaylist(item.playlistId)?.name : null,
+      duration: sec(d.length), mixAt: sec(d.mixAt),
+    };
     this.history.unshift({ id: media.id, title: displayTitle(media), at: Date.now(), source: item.source });
     this.history.length = Math.min(this.history.length, 50);
     markPlayed(media.id);
     // Le titre change sur le flux (et donc dans l'historique des titres et les stats).
     // Au démarrage, la source n'est pas encore connectée à Icecast : on réessaie quelques fois.
     const title = displayTitle(media);
-    const send = (attempt) => this.api.updateMetadata(this.getConfig().mount, title).catch(() => {
-      if (attempt < 6 && this.main === d) setTimeout(() => send(attempt + 1), 1500);
-    });
-    send(1);
+    for (const o of this.station().outputs) {
+      const send = (attempt) => this.api.updateMetadata(o.mount, title).catch(() => {
+        if (attempt < 6 && this.main === d) setTimeout(() => send(attempt + 1), 1500);
+      });
+      send(1);
+    }
     this.changed();
   }
 
@@ -499,7 +540,7 @@ export class AutoDJ extends EventEmitter {
     }
     this.state = 'stopped';
     this.current = null;
-    this.log('info', 'autodj', 'AutoDJ arrêté');
+    this.log('info', 'autodj', `${this.station().name} : AutoDJ arrêté`);
     this.changed();
   }
 }

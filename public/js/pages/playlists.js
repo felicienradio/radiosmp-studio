@@ -71,7 +71,8 @@ export default function playlistsPage(view, { params, topbar }) {
       <div class="stack" style="gap:10px">
         ${lists.length ? lists.map((p) => html`<a class="card" href="#/playlists/${p.id}" style="padding:14px 16px;text-decoration:none;color:inherit;${p.id === selectedId ? 'border-color:var(--accent);background:var(--accent-soft)' : ''}">
           <div class="row between"><b>${p.name}</b><span class="badge ${p.kind === 'jingle' ? 'warn' : 'accent'}">${p.kind === 'jingle' ? 'Jingles' : 'Musique'}</span></div>
-          <div class="dim small mt" style="margin-top:4px">${fmtNum(p.count)} titre${p.count > 1 ? 's' : ''} · ${fmtDuration(p.duration, true)} · ${p.shuffle ? 'aléatoire' : 'dans l\'ordre'}</div></a>`)
+          <div class="dim small mt" style="margin-top:4px">${fmtNum(p.count)} titre${p.count > 1 ? 's' : ''} · ${fmtDuration(p.duration, true)} · ${p.shuffle ? 'aléatoire' : 'dans l\'ordre'}</div>
+          <div class="small" style="margin-top:4px">${p.stations ? html`${icon('disc')} ${p.stations}` : html`<span class="dim">Dans aucune station AutoDJ</span>`}</div></a>`)
           : html`<div class="card empty">Aucune playlist pour l'instant.<br>Créez-en une avec le bouton « Nouvelle playlist ».</div>`}
       </div>
       <div>${current ? html`
@@ -89,6 +90,8 @@ export default function playlistsPage(view, { params, topbar }) {
                 <option value="0" ${current.shuffle ? '' : 'selected'}>Dans l'ordre</option></select></label>
             </div>
           </div>
+          <p class="dim small" style="margin:10px 0 0">Pour la diffuser, ajoutez-la à une station sur la page <a href="#/autodj">AutoDJ</a>
+            (en rotation, ou une fois tous les N titres pour des jingles).</p>
           <div class="row mt"><button class="btn" type="submit">Enregistrer</button>
             <span class="dim small">${fmtNum(current.items.length)} titre${current.items.length > 1 ? 's' : ''} · ${fmtDuration(total, true)}</span></div>
         </form>
@@ -145,7 +148,7 @@ export default function playlistsPage(view, { params, topbar }) {
     const cue = e.target.closest('[data-cue]');
     if (cue && await openCueEditor(current.items.find((m) => m.id === Number(cue.dataset.cue)))) load();
     if (e.target.closest('#pl-del')) {
-      if (!await confirmDialog('Supprimer la playlist ?', `« ${current.name} » sera supprimée (les musiques restent dans la bibliothèque). Les créneaux de la grille qui l'utilisent seront aussi supprimés.`, { confirm: 'Supprimer', danger: true })) return;
+      if (!await confirmDialog('Supprimer la playlist ?', `« ${current.name} » sera supprimée (les musiques restent dans la bibliothèque). Elle sera retirée des stations AutoDJ, et les créneaux de la grille qui l'utilisent seront supprimés.`, { confirm: 'Supprimer', danger: true })) return;
       await run(null, () => api(`/autodj/playlists/${current.id}`, { method: 'DELETE' }), 'Playlist supprimée');
       selectedId = null;
       location.hash = '#/playlists';

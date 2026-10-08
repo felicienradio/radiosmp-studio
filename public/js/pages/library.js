@@ -44,10 +44,32 @@ export async function choosePlaylist(title, kind) {
   });
 }
 
+/** Station AutoDJ où jouer un titre ensuite (choix demandé s'il y en a plusieurs). */
+async function chooseStation() {
+  const { stations } = await api('/autodj');
+  if (stations.length <= 1) return stations[0]?.id ?? null;
+  return new Promise((resolve) => {
+    let chosen = null;
+    const { dlg, close } = modal({
+      title: 'Jouer ensuite sur quelle station ?',
+      body: html`<form id="cs" class="stack"><label class="field">Station<select name="id" style="width:100%">
+        ${stations.map((st) => html`<option value="${st.id}">${st.name} (${st.outputs.map((o) => o.mount).join(', ')})${st.state === 'playing' ? '' : ' · arrêtée'}</option>`)}</select></label></form>`,
+      footer: html`<button class="btn" data-close>Annuler</button><button class="btn primary" form="cs">Ajouter à la file</button>`,
+    });
+    dlg.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      chosen = Number(e.target.id.value);
+      close();
+    });
+    dlg.addEventListener('close', () => resolve(chosen));
+  });
+}
+
 export default function libraryPage(view, { topbar }) {
   let items = [];
   let stats = { count: 0, duration: 0, size: 0 };
   let analysing = 0;
+  let autoCue = true;
   let poll = null;
   let search = '';
   const selected = new Set();
@@ -83,6 +105,7 @@ export default function libraryPage(view, { topbar }) {
         <span class="muted">${fmtNum(stats.count)} titres · ${fmtDuration(stats.duration, true)} · ${fmtBytes(stats.size)}</span>
         <div class="row">
           ${analysing ? html`<span class="dim small">${icon('wave')} Points cue : ${fmtNum(analysing)} titre${analysing > 1 ? 's' : ''} en analyse…</span>` : ''}
+          <label class="check small" title="Analyse de chaque nouveau titre envoyé"><input type="checkbox" id="auto-cue" ${autoCue ? 'checked' : ''}> Cue auto à l'envoi</label>
           <button class="btn sm" id="analyse-all" title="Recalcule les points cue automatiques (les réglages faits à la main sont conservés)">${icon('wave')} Points cue automatiques</button>
           <button class="btn sm" id="add-selection" ${selected.size ? '' : 'disabled'}>${icon('plus')} Ajouter la sélection (${selected.size}) à une playlist</button>
         </div>
@@ -120,6 +143,7 @@ export default function libraryPage(view, { topbar }) {
     items = r.items;
     stats = r.stats;
     analysing = r.analysing || 0;
+    autoCue = r.autoCue !== false;
     render();
     // Analyse en cours : on rafraîchit jusqu'à la fin
     clearTimeout(poll);
@@ -158,6 +182,10 @@ export default function libraryPage(view, { topbar }) {
 
   view.addEventListener('change', (e) => {
     if (e.target.id === 'files' && e.target.files.length) sendFiles(e.target.files);
+    if (e.target.id === 'auto-cue') {
+      api('/autodj/settings', { method: 'PUT', body: { autoCue: e.target.checked } })
+        .then((r) => toast(r.autoCue ? 'Points cue automatiques activés pour les nouveaux titres' : 'Points cue automatiques désactivés'));
+    }
     const sel = e.target.closest('[data-sel]');
     if (sel) {
       const id = Number(sel.dataset.sel);
@@ -192,7 +220,10 @@ export default function libraryPage(view, { topbar }) {
       load();
     }
     const next = e.target.closest('[data-next]');
-    if (next) await run(next, () => api('/autodj/queue', { method: 'POST', body: { mediaId: Number(next.dataset.next) } }), 'Ajouté à la file d\'attente de l\'AutoDJ');
+    if (next) {
+      const station = await chooseStation();
+      if (station) await run(next, () => api(`/autodj/stations/${station}/queue`, { method: 'POST', body: { mediaId: Number(next.dataset.next) } }), 'Ajouté à la file d\'attente de l\'AutoDJ');
+    }
     const add = e.target.closest('[data-add]');
     if (add || e.target.closest('#add-selection')) {
       const ids = add ? [Number(add.dataset.add)] : [...selected];

@@ -29,6 +29,9 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - Démarrage, arrêt, redémarrage d'Icecast, redémarrage automatique en cas de plantage
 - Auditeurs en direct (ville, appareil, lecteur), déconnexion, déplacement vers un autre flux
 - Changement du titre en cours, coupure d'une source, journal des événements et logs Icecast
+- **AutoDJ par stations** (comme AzuraCast) : autant de stations que tu veux, chacune sur ses propres flux de sortie
+  (plusieurs formats et débits), avec plusieurs playlists en rotation pondérée, insertions tous les N titres ou toutes
+  les N minutes, et sa grille horaire
 - **AutoDJ** : bibliothèque musicale (glisser-déposer), playlists musique et jingles, diffusion 24 h/24 sans blanc entre
   les titres, grille horaire, un jingle tous les N titres, demandes (« jouer ensuite »), le direct prend l'antenne
   automatiquement et l'AutoDJ reprend quand l'animateur coupe

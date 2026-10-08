@@ -63,22 +63,35 @@ Dans *Stream*, choisis MP3 ou AAC, 128 ou 192 kbps. Pour que le titre s'affiche,
 
 ## L'AutoDJ (diffusion automatique)
 
+Comme sur AzuraCast, l'AutoDJ fonctionne par **stations** : chaque station diffuse sa propre programmation sur
+ses propres flux. Par exemple, *RadioSMP AutoDJ* en secours de `/live`, et une station *Rap* 24 h/24 sur `/rap`.
+
 1. **Bibliothèque** : glisse tes fichiers (MP3, AAC/M4A, OGG, Opus, FLAC, WAV) dans la zone d'envoi.
    Titre et artiste sont lus dans les tags du fichier, sinon dans son nom (« Artiste - Titre.mp3 »). Modifiables ensuite (✎).
-2. **Playlists** : crée une playlist « Musique » (ex. *Hits*), choisis *Aléatoire* ou *Dans l'ordre*, puis **Ajouter des titres**.
-   Pour les jingles, crée une playlist de type « Jingles ».
-3. **AutoDJ** :
-   - **Configurer** (bandeau du haut), puis **Appliquer maintenant** : crée le flux `/autodj` et en fait le **secours de `/live`**.
-     Les auditeurs de `/live` entendent l'AutoDJ ; quand un animateur se connecte sur `/live`, il prend l'antenne
-     automatiquement, et l'AutoDJ reprend dès qu'il coupe ;
-   - **Réglages** : playlist par défaut, playlist de jingles et fréquence (« un jingle tous les N titres »), format et débit ;
-   - **Démarrer l'AutoDJ**. Il redémarre tout seul avec le dashboard.
-4. **Grille horaire** : ajoute des créneaux (jours + heures → playlist), par exemple *Hits* du lundi au vendredi de 7h à 10h,
-   *Chill* le week-end. En dehors des créneaux, la playlist par défaut tourne.
+2. **Playlists** : crée tes playlists (ex. *Hits*, *Rap US*, *Chill*), choisis *Aléatoire* ou *Dans l'ordre*,
+   puis **Ajouter des titres**. Pour les jingles, crée une playlist de type « Jingles ».
+   Une même playlist peut servir à plusieurs stations.
+3. **AutoDJ** : un onglet par station en haut de la page, et **Nouvelle station** pour en ajouter une.
+   - **Flux de sortie et réglages** :
+     - le nom de la station ;
+     - ses **flux de sortie** : autant de points de montage que tu veux, chacun avec son format et son débit
+       (ex. `/rap` en MP3 320 et `/rap-mobile` en AAC 64) ;
+     - le **flux direct prioritaire** (facultatif, ex. `/live`) : ses auditeurs entendent la station quand aucun
+       animateur n'est connecté, un animateur qui se connecte prend l'antenne, et la station reprend quand il coupe ;
+     - les enchaînements aux points cue.
+   - **Configurer** (bandeau du haut), puis **Appliquer maintenant** : crée les points de montage dans Icecast.
+   - **Playlists de la station** : ajoute autant de playlists que tu veux et choisis comment chacune est diffusée :
+     - **Rotation** avec un **poids** de 1 à 10 : à chaque titre, une playlist en rotation est tirée au sort selon son
+       poids (Hits poids 6 et Chill poids 3 : Hits passe deux fois plus souvent). La colonne **Part** donne le pourcentage ;
+     - **Une fois tous les N titres** : jingles, pubs, habillage ;
+     - **Une fois toutes les N minutes** : flash, identifiant de la station.
+   - **Démarrer**. Chaque station démarrée redémarre toute seule avec le dashboard.
+4. **Grille horaire** (propre à chaque station) : ajoute des créneaux (jours + heures → playlist), par exemple *Hits* du
+   lundi au vendredi de 7h à 10h. Pendant un créneau, sa playlist remplace la rotation ; les jingles et insertions continuent.
 
 Pendant la diffusion :
 - **Passer** saute au titre suivant ;
-- dans la Bibliothèque, le bouton « jouer ensuite » place un titre en tête de la file (*Demande*) ;
+- dans la Bibliothèque, le bouton « jouer ensuite » place un titre en tête de la file (*Demande*), sur la station de ton choix ;
 - les titres joués apparaissent dans **Titres diffusés** et dans les statistiques comme ceux d'un animateur.
 
 ### Les points cue
@@ -101,7 +114,7 @@ de la Bibliothèque.
   remet les valeurs calculées.
 
 Ça marche pareil pour les jingles, par exemple un jingle qui démarre sur la fin d'une musique. Pour que les titres
-s'enchaînent sans se chevaucher, décoche **Enchaînements aux points cue** dans les réglages de l'AutoDJ : les silences
+s'enchaînent sans se chevaucher, décoche **Enchaînements aux points cue** dans les réglages de la station : les silences
 restent coupés. **Passer** fait un fondu de 1,5 s sur le titre en cours.
 
 Conseil : règle l'AutoDJ dans le **même format et le même débit** que tes animateurs (ex. MP3 320 kbps) pour que le passage

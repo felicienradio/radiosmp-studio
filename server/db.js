@@ -105,6 +105,30 @@ db.exec(`
   );
 `);
 
+// Stations AutoDJ (comme AzuraCast) : chacune diffuse sur ses propres flux, avec ses playlists et sa grille.
+// outputs : JSON [{ mount, format, bitrate }] ; live_mount : flux direct qui a la station comme secours.
+// station_playlists.mode : « rotation » (poids), « tracks » (une fois tous les N titres), « minutes » (toutes les N minutes)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stations (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    outputs TEXT NOT NULL DEFAULT '[]',
+    live_mount TEXT,
+    crossfade INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS station_playlists (
+    station_id INTEGER NOT NULL,
+    playlist_id INTEGER NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'rotation',
+    weight INTEGER NOT NULL DEFAULT 3,
+    every INTEGER NOT NULL DEFAULT 4,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (station_id, playlist_id)
+  );
+`);
+
 // Migrations : colonnes ajoutées après la première version
 const sessionCols = new Set(db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name));
 for (const [col, type] of [['device', 'TEXT'], ['city', 'TEXT'], ['lat', 'REAL'], ['lon', 'REAL']]) {
@@ -116,6 +140,10 @@ const mediaCols = new Set(db.prepare('PRAGMA table_info(media)').all().map((c) =
 for (const [col, type] of [['cue_in', 'REAL'], ['cue_mix', 'REAL'], ['cue_out', 'REAL'], ['fade_in', 'REAL NOT NULL DEFAULT 0'],
   ['fade_out', 'REAL NOT NULL DEFAULT 0'], ['cue_auto', 'INTEGER NOT NULL DEFAULT 1'], ['cue_level', 'REAL'], ['analyzed_at', 'INTEGER']]) {
   if (!mediaCols.has(col)) db.exec(`ALTER TABLE media ADD COLUMN ${col} ${type}`);
+}
+// La grille horaire appartient à une station
+if (!db.prepare('PRAGMA table_info(schedule)').all().some((c) => c.name === 'station_id')) {
+  db.exec('ALTER TABLE schedule ADD COLUMN station_id INTEGER');
 }
 
 export function tx(fn) {
