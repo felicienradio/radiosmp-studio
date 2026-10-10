@@ -174,7 +174,7 @@ Description=Vérification des mises à jour de Flux toutes les 6 heures
 
 [Timer]
 OnBootSec=10min
-OnUnitActiveSec=6h
+OnUnitActiveSec=1h
 Persistent=true
 
 [Install]

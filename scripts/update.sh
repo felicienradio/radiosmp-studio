@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Mise à jour de RadioSMP Studio depuis GitHub. Lancé en root par systemd :
 #   - flux-update.service       à la demande du dashboard (bouton « Mettre à jour » / « Vérifier »)
-#   - flux-update-check.timer   vérification automatique toutes les 6 heures
+#   - flux-update-check.timer   vérification automatique toutes les heures
 # Utilisable aussi à la main :  bash /opt/flux/scripts/update.sh check|update
 #
 # Tout est dans main() : bash lit la fonction en entier avant de l'exécuter, ce qui permet

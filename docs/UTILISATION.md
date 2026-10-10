@@ -50,7 +50,7 @@ Chaque point de montage a **son propre mot de passe** : un animateur ne peut dif
 |---|---|
 | Type | Icecast |
 | Address | ton nom d'hôte public (ex. `stream.radiosmp.fr`) ou l'IP du conteneur |
-| Port | `8000` |
+| Port | celui indiqué dans la fenêtre **Connexion** (`8000` par défaut) |
 | Password | le mot de passe du flux |
 | Icecast mountpoint | `/live` (le chemin du flux) |
 | Icecast user | `source` (ou l'utilisateur indiqué) |
@@ -119,6 +119,17 @@ restent coupés. **Passer** fait un fondu de 1,5 s sur le titre en cours.
 
 Conseil : règle l'AutoDJ dans le **même format et le même débit** que tes animateurs (ex. MP3 320 kbps) pour que le passage
 de l'un à l'autre soit propre pour les auditeurs.
+
+## Les ports
+
+Sur la page **Serveur**, bloc *Identité* :
+- **Port d'Icecast** : le port sur lequel Icecast écoute (`8000` par défaut). Après modification, clique sur
+  **Appliquer maintenant** ; l'AutoDJ et le relais HTTPS suivent tout seuls.
+- **Port public (sortie)** : à remplir seulement si ta box redirige un autre port vers Icecast (ex. `8600` → `8000`).
+  C'est lui qui apparaît dans les liens d'écoute `http://` et dans la fenêtre **Connexion** pour les encodeurs.
+
+Avec l'**adresse publique HTTPS** (ex. `https://gmusique.fr`), les liens d'écoute, le M3U et les **infos JSON**
+(`https://gmusique.fr/status-json.xsl?mount=/live`) passent par le dashboard : aucun port à ouvrir pour les auditeurs.
 
 ## Le buffer de démarrage
 

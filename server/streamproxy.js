@@ -56,6 +56,28 @@ export function relayStream(req, res, { port, mount }) {
   upstream.end();
 }
 
+/**
+ * Relaie /status-json.xsl (infos publiques des flux : titre en cours, auditeurs) : les sites et lecteurs
+ * l'interrogent ainsi en HTTPS sur l'adresse publique, sans ouvrir le port d'Icecast.
+ */
+export function relayStatus(req, res, { port }) {
+  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const upstream = http.get({ host: '127.0.0.1', port, path: `/status-json.xsl${q}`, timeout: 5000 }, (up) => {
+    res.status(up.statusCode || 502);
+    res.set({
+      'Content-Type': up.headers['content-type'] || 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-cache',
+    });
+    up.pipe(res);
+  });
+  upstream.on('timeout', () => upstream.destroy(new Error('timeout')));
+  upstream.on('error', () => {
+    if (!res.headersSent) res.status(502).type('text/plain').send('Icecast indisponible');
+    else res.end();
+  });
+}
+
 /** Playlist M3U pointant vers l'adresse publique du flux. */
 export function playlist(res, url, name) {
   res.type('audio/x-mpegurl').send(`#EXTM3U\n#EXTINF:-1,${name || url}\n${url}\n`);

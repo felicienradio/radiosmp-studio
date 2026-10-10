@@ -41,7 +41,7 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - **Personnalisation** : nom, logos, couleurs, police et thème, depuis le dashboard
 - **Buffer par flux** : « Faible latence » (buffer 0) ou « Démarrage instantané »
 - **Flux en HTTPS** relayés par le dashboard (`https://ton-domaine/live`), démarrage rapide du son (burst de 5 s à 320 kbps)
-- **Mises à jour depuis GitHub** en un clic, vérification automatique toutes les 6 heures
+- **Mises à jour depuis GitHub** en un clic, vérification automatique toutes les heures et notification quand une version sort
 
 ## Installation dans un conteneur LXC Proxmox (Debian 12 / 13)
 
@@ -66,7 +66,7 @@ Le script installe Icecast (paquet Debian 2.4.4), Node.js 22, l'utilisateur `flu
 et le service `flux` lancé au démarrage du conteneur.
 
 **Mises à jour** : en un clic depuis le dashboard (**Serveur** → **Mises à jour**), avec vérification automatique
-toutes les 6 heures. Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser.
+toutes les heures. Les réglages et statistiques (`/opt/flux/data`) sont conservés et Icecast continue de diffuser.
 Détails : [guide, section « Mettre à jour »](docs/INSTALLATION-PROXMOX.md#mettre-à-jour).
 
 **Flux en HTTPS** : le dashboard relaie les flux. Derrière ton reverse proxy HTTPS, `https://ton-domaine/live` sert

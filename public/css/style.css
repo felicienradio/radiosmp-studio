@@ -493,3 +493,7 @@ p svg, .small svg, .hint svg, td svg:not(.btn svg) { width: 14px; height: 14px; 
 .cue-grid .field > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
 .cue-legend .dot { display: inline-block; vertical-align: middle; margin-right: 2px; }
 @media (max-width: 760px) { .cue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Pastille « mise à jour disponible » dans le menu */
+.nav .update-dot { background: var(--accent); color: #fff; }
+.nav .update-dot[hidden] { display: none; }

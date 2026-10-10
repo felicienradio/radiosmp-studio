@@ -146,7 +146,7 @@ Le réglage est de 192 Ko (environ 5 s à 320 kbps, 12 s à 128 kbps) : **Serveu
 
 **Serveur** → **Mises à jour** → **Vérifier**, puis **Mettre à jour**. Le dashboard télécharge la dernière version
 sur GitHub, l'installe et redémarre (environ une minute). Icecast et les flux continuent de diffuser.
-Une vérification automatique a lieu toutes les 6 heures ; un bandeau s'affiche quand une nouvelle version est disponible.
+Une vérification automatique a lieu toutes les heures. Quand une nouvelle version est disponible, un bandeau et une pastille sur « Serveur » apparaissent, et le navigateur peut aussi afficher une notification (bouton « Recevoir aussi une notification » sur la page Serveur).
 
 ### En ligne de commande
 

@@ -68,8 +68,12 @@ export default function serverPage(view, { store, onLive }) {
             <div class="form-grid">
               <label class="field">Nom d'hôte public<input name="hostname" value="${st.hostname}" required>
                 <span class="hint">Adresse par laquelle les auditeurs joignent le serveur (nom de domaine ou IP publique). Utilisée dans les liens d'écoute.</span></label>
-              <label class="field" data-managed>Port<input type="number" name="port" value="${st.port}" min="1" max="65535" required>
-                <span class="hint">8000 par défaut. À ouvrir dans le pare-feu et la box pour l'écoute depuis Internet.</span></label>
+              <label class="field" data-managed>Port d'Icecast<input type="number" name="port" value="${st.port}" min="1" max="65535" required>
+                <span class="hint">Port sur lequel Icecast écoute (8000 par défaut). Appliqué au prochain redémarrage d'Icecast ;
+                  l'AutoDJ et le relais HTTPS suivent automatiquement.</span></label>
+              <label class="field" data-managed>Port public (sortie)<input type="number" name="publicPort" value="${st.publicPort || ''}" min="0" max="65535" placeholder="${st.port} (le même)">
+                <span class="hint">Port vu depuis Internet, si votre box redirige un autre port vers Icecast (ex. 8600 → 8000).
+                  Utilisé dans les liens d'écoute et pour les encodeurs. Laissez vide s'il est identique.</span></label>
               <label class="field full">Adresse publique des flux (HTTPS)<input name="publicUrl" value="${st.publicUrl}" placeholder="https://icecast.radiosmp.fr">
                 <span class="hint">Adresse du dashboard derrière votre reverse proxy HTTPS : les flux y sont relayés
                   (ex. <code>https://icecast.radiosmp.fr/live</code>) en gardant l'IP réelle des auditeurs. Utilisée dans les liens à partager.
@@ -264,8 +268,14 @@ export default function serverPage(view, { store, onLive }) {
       <dl class="kv">
         <dt>Version installée</dt><dd><code>${short(u.version)}</code>${u.repo && u.version ? html` <a class="small" href="${u.repo}/commit/${u.version}" target="_blank" rel="noopener">voir sur GitHub</a>` : ''}</dd>
         ${u.latest ? html`<dt>Dernière version</dt><dd><code>${short(u.latest)}</code></dd>` : ''}
-        ${u.checkedAt ? html`<dt>Dernière vérification</dt><dd>${fmtDateTime(u.checkedAt)} <span class="dim small">(automatique toutes les 6 h)</span></dd>` : ''}
+        ${u.checkedAt ? html`<dt>Dernière vérification</dt><dd>${fmtDateTime(u.checkedAt)} <span class="dim small">(automatique toutes les heures)</span></dd>` : ''}
       </dl>
+      ${u.supported && 'Notification' in window ? html`<p class="small muted" style="margin-bottom:0">${Notification.permission === 'granted'
+        ? html`${icon('check')} Ce navigateur affiche une notification dès qu'une mise à jour est disponible (dashboard ouvert).`
+        : Notification.permission === 'denied'
+          ? 'Les notifications sont bloquées pour ce site dans votre navigateur : un bandeau s\'affiche quand même dans le dashboard.'
+          : html`Un bandeau s'affiche dans le dashboard quand une mise à jour est disponible.
+            <button class="btn sm" data-notif>${icon('bell')} Recevoir aussi une notification</button>`}</p>` : ''}
       ${!u.supported ? html`<p class="muted">Les mises à jour en un clic fonctionnent sur l'installation Linux (conteneur LXC).
         Ici, mettez à jour avec <code>git pull</code> puis relancez le dashboard.</p>` : ''}
       ${u.error && u.state !== 'needs-key' ? html`<div class="banner error mt"><div class="grow">${u.error}</div></div>` : ''}
@@ -312,10 +322,16 @@ export default function serverPage(view, { store, onLive }) {
   }
 
   view.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-notif]')) {
+      const r = await Notification.requestPermission();
+      toast(r === 'granted' ? 'Notifications activées' : 'Notifications refusées par le navigateur', r === 'granted' ? 'ok' : 'error');
+      renderUpdate();
+      return;
+    }
     const b = e.target.closest('[data-upd]');
     if (!b) return;
     if (b.dataset.upd === 'run') {
-      if (!await confirmDialog('Mettre à jour depuis GitHub ?', 'Le dashboard redémarre pendant la mise à jour (environ une minute). Icecast et les flux continuent de diffuser.', { confirm: 'Mettre à jour' })) return;
+      if (!await confirmDialog('Mettre à jour depuis GitHub ?', 'Le dashboard redémarre pendant la mise à jour (environ une minute). Icecast et les flux en direct continuent de diffuser ; l\'AutoDJ reprend tout seul à la fin.', { confirm: 'Mettre à jour' })) return;
       versionBefore = update?.version || 'x';
     }
     update = await run(b, () => api(`/update/${b.dataset.upd}`, { method: 'POST' })).catch(() => update);

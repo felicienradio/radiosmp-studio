@@ -131,10 +131,12 @@ export async function openConnection(name) {
   const user = m.password ? m.username || 'source' : 'source';
   const dedicated = !!m.password;
   const pass = m.password || c.sourcePassword;
-  const base = c.managed ? `http://${c.host}:${c.port}` : c.apiUrl.replace(/\/+$/, '');
+  // Adresse directe d'Icecast (port public, celui ouvert sur la box) et adresse publique HTTPS relayée par le dashboard
+  const base = c.managed ? `http://${c.host}:${c.publicPort || c.port}` : c.apiUrl.replace(/\/+$/, '');
   const host = base.replace(/^https?:\/\//, '').split(':')[0];
   const port = base.split(':')[2] || c.port;
-  const listen = `${c.publicUrl || base}${m.name}`;
+  const pub = c.publicUrl || base;
+  const listen = `${pub}${m.name}`;
   const embed = `<audio controls preload="none" src="${listen}"></audio>`;
   modal({
     title: `Connexion à ${m.name}`,
@@ -153,14 +155,15 @@ export async function openConnection(name) {
             <dt>Mot de passe</dt><dd>${secret(pass)}</dd>
           </dl>
           <p class="dim small">${dedicated ? 'Ces identifiants sont propres à ce flux.' : 'Mot de passe source global (réglable sur la page Serveur).'}
-          Si l'encodeur est sur un autre ordinateur, remplacez l'adresse par l'IP de ce PC.</p>
+          ${c.managed && c.publicPort !== c.port ? html`Sur le réseau local, utilisez le port d'Icecast <code>${c.port}</code>. ` : ''}
+          Si l'encodeur est sur le même réseau, vous pouvez aussi mettre l'IP locale du serveur.</p>
         </div>
         <div>
           <h3>Pour vos auditeurs</h3>
           <dl class="kv mt">
             <dt>Lien direct</dt><dd>${copyable(listen)}</dd>
             <dt>Playlist M3U</dt><dd>${copyable(`${listen}.m3u`)}</dd>
-            <dt>Infos JSON</dt><dd>${copyable(`${base}/status-json.xsl?mount=${m.name}`)}</dd>
+            <dt>Infos JSON</dt><dd>${copyable(`${pub}/status-json.xsl?mount=${m.name}`)}</dd>
           </dl>
           <h3 class="mt">Lecteur à intégrer sur votre site</h3>
           <div class="row mt"><textarea rows="3" readonly>${embed}</textarea></div>

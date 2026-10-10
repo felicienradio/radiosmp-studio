@@ -62,6 +62,7 @@ function defaults() {
       hostname: process.env.FLUX_PUBLIC_HOST || 'localhost',
       // Adresse publique des flux, ex. https://icecast.radiosmp.fr (flux relayés par le dashboard)
       publicUrl: '',
+      publicPort: 0, // port vu depuis Internet s'il diffère (redirection de la box) ; 0 = celui d'Icecast
       port: 8000,
       location: 'France',
       adminEmail: 'admin@localhost',

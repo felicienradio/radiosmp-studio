@@ -11,12 +11,22 @@ import { Collector } from './collector.js';
 import * as stats from './stats.js';
 import { initGeo, geoStatus, downloadGeo, lookup } from './geo.js';
 import { authRoutes, requireAuth, changePassword } from './auth.js';
-import { relayStream, playlist, relayCount } from './streamproxy.js';
-import { updateStatus, requestUpdate } from './update.js';
+import { relayStream, relayStatus, playlist, relayCount } from './streamproxy.js';
+import { updateStatus, requestUpdate, watchUpdates } from './update.js';
 import { brandingRoutes } from './branding.js';
 import { AutoDJManager } from './autodj/manager.js';
 import { autodjRoutes } from './autodj/routes.js';
 import { migrateStations, stationsUsingMount, updateStation, setEnabled } from './autodj/stations.js';
+
+// Stabilité : une erreur imprévue est journalisée au lieu d'arrêter le dashboard (et donc l'AutoDJ)
+process.on('unhandledRejection', (err) => {
+  console.error('Erreur non gérée :', err);
+  try { logEvent('error', 'dashboard', `Erreur interne : ${err?.message || err}`); } catch {}
+});
+process.on('uncaughtException', (err) => {
+  console.error('Exception non gérée :', err);
+  try { logEvent('error', 'dashboard', `Erreur interne : ${err?.message || err}`); } catch {}
+});
 
 const settings = loadSettings();
 const ice = () => getSettings().icecast;
@@ -83,7 +93,7 @@ app.use('/api', (req, res, next) => {
 const clients = new Set();
 function links() {
   const i = ice();
-  const publicBase = i.publicUrl || (i.managed ? `http://${i.hostname}:${i.port}` : i.apiUrl.replace(/\/+$/, ''));
+  const publicBase = i.publicUrl || (i.managed ? `http://${i.hostname}:${i.publicPort || i.port}` : i.apiUrl.replace(/\/+$/, ''));
   return { publicBase, managed: i.managed, port: i.port, relay: i.managed };
 }
 app.get('/api/live', (req, res) => res.json({ ...collector.live, history: collector.history, process: proc.status(), links: links() }));
@@ -105,6 +115,13 @@ autodj.on('change', () => {
 });
 proc.on('state', (status) => broadcast('process', status));
 setInterval(() => broadcast('ping', Date.now()), 25_000);
+// Nouvelle version sur GitHub : notification en direct dans le dashboard et ligne dans le journal
+watchUpdates((u, { first }) => {
+  broadcast('update', u);
+  if (!first && u.state === 'available') {
+    logEvent('info', 'config', `Nouvelle version disponible : ${u.commits[0]?.subject || u.latest?.slice(0, 7) || ''}`);
+  }
+});
 
 // ---------- Statistiques ----------
 
@@ -285,7 +302,10 @@ app.post('/api/mounts/fallback', wrap(async (req) => {
 
 function connectionInfo() {
   const i = ice();
-  return { host: i.hostname, port: i.port, sourceUser: 'source', sourcePassword: i.sourcePassword, managed: i.managed, apiUrl: i.apiUrl, publicUrl: i.publicUrl || '' };
+  return {
+    host: i.hostname, port: i.port, publicPort: i.publicPort || i.port, sourceUser: 'source', sourcePassword: i.sourcePassword,
+    managed: i.managed, apiUrl: i.apiUrl, publicUrl: i.publicUrl || '',
+  };
 }
 
 // ---------- Serveur Icecast ----------
@@ -297,7 +317,7 @@ function serverView() {
     live: { online: collector.live.online, error: collector.live.error, server: collector.live.server },
     settings: {
       managed: i.managed, binary: i.binary, autoStart: i.autoStart, autoRestart: i.autoRestart, apiUrl: i.apiUrl,
-      hostname: i.hostname, port: i.port, location: i.location, adminEmail: i.adminEmail, publicUrl: i.publicUrl || '',
+      hostname: i.hostname, port: i.port, publicPort: i.publicPort || 0, location: i.location, adminEmail: i.adminEmail, publicUrl: i.publicUrl || '',
       adminUser: i.adminUser, adminPassword: i.adminPassword, sourcePassword: i.sourcePassword, relayPassword: i.relayPassword,
       limits: i.limits,
     },
@@ -345,6 +365,8 @@ app.put('/api/server/settings', wrap((req) => {
       i.publicUrl = u;
     }
     if ('port' in b) i.port = int(b.port, 1, 65535);
+    // Port vu depuis Internet (redirection de la box ou NAT différente) : 0 = le même que celui d'Icecast
+    if ('publicPort' in b) i.publicPort = b.publicPort === '' || b.publicPort === null ? 0 : int(b.publicPort, 0, 65535);
     if ('location' in b) i.location = str(b.location);
     if ('adminEmail' in b) i.adminEmail = str(b.adminEmail);
     if ('adminUser' in b) i.adminUser = str(b.adminUser, 50) || 'admin';
@@ -441,15 +463,16 @@ app.use((req, res, next) => {
   if ((req.method !== 'GET' && req.method !== 'HEAD') || req.path.startsWith('/api/')) return next();
   let p;
   try { p = decodeURIComponent(req.path); } catch { return next(); }
-  const mounts = streamMounts();
   const i = ice();
+  const icePort = (proc.state === 'running' && proc.applied?.port) || i.port;
+  if (p === '/status-json.xsl' && i.managed) return relayStatus(req, res, { port: icePort });
+  const mounts = streamMounts();
   const base = i.publicUrl || `${req.protocol}://${req.get('host')}`;
   const m3u = p.match(/^(.+)\.m3u8?$/);
   if (m3u && mounts.has(m3u[1])) return playlist(res, `${base}${m3u[1]}`, mounts.get(m3u[1]));
   if (!mounts.has(p)) return next();
   if (!i.managed) return res.redirect(302, `${i.apiUrl.replace(/\/+$/, '')}${p}`);
-  const port = (proc.state === 'running' && proc.applied?.port) || i.port;
-  relayStream(req, res, { port, mount: p });
+  relayStream(req, res, { port: icePort, mount: p });
 });
 
 app.use('/vendor/chart.js', express.static(path.join(ROOT, 'node_modules/chart.js/dist')));

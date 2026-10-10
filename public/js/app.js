@@ -66,6 +66,29 @@ function connectStream() {
     store.process = JSON.parse(e.data);
     emit();
   });
+  es.addEventListener('update', (e) => {
+    const u = JSON.parse(e.data);
+    const wasAvailable = store.update?.state === 'available' && store.update.latest === u.latest;
+    store.update = u;
+    if (u.state === 'available' && !wasAvailable) notifyUpdate(u);
+    renderChrome();
+  });
+  // Après une coupure (redémarrage, mise à jour), l'état peut avoir changé
+  es.addEventListener('open', () => {
+    api('/update').then((u) => { store.update = u; renderChrome(); }).catch(() => {});
+  });
+}
+
+/** Nouvelle version : message dans le dashboard et notification du navigateur (si autorisée). */
+function notifyUpdate(u) {
+  const what = u.commits[0]?.subject || 'Nouvelle version disponible';
+  toast(`Mise à jour disponible : ${what}`);
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const n = new Notification(`${store.branding.name} Studio : mise à jour disponible`, { body: what, icon: '/branding/favicon', tag: `update-${u.latest}` });
+      n.onclick = () => { window.focus(); location.hash = '#/serveur'; n.close(); };
+    }
+  } catch {}
 }
 
 // ---------- Mise en page ----------
@@ -81,7 +104,7 @@ function layout() {
           <span class="brand-sub">Studio · Icecast</span>
         </a>
         <nav class="nav">
-          ${PAGES.map((p) => html`${p.sep ? raw('<div class="nav-sep"></div>') : ''}<a href="#/${p.path}" data-path="${p.path}">${icon(p.icon)}<span>${p.label}</span>${p.count ? raw('<span class="count" data-count>0</span>') : ''}</a>`)}
+          ${PAGES.map((p) => html`${p.sep ? raw('<div class="nav-sep"></div>') : ''}<a href="#/${p.path}" data-path="${p.path}">${icon(p.icon)}<span>${p.label}</span>${p.count ? raw('<span class="count" data-count>0</span>') : ''}${p.path === 'serveur' ? raw('<span class="count update-dot" data-update-dot hidden title="Mise à jour disponible">1</span>') : ''}</a>`)}
         </nav>
         <div class="sidebar-foot">
           <div class="server-pill" id="server-pill"></div>
@@ -144,6 +167,9 @@ function renderChrome() {
   const proc = store.process;
   const count = $('[data-count]');
   if (count) count.textContent = fmtNum(live?.totals?.listeners || 0);
+  // Pastille sur « Serveur » tant qu'une mise à jour attend
+  const upd = $('[data-update-dot]');
+  if (upd) upd.hidden = store.update?.state !== 'available';
 
   const pill = $('#server-pill');
   if (pill && proc) {

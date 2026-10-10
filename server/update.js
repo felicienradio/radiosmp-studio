@@ -65,6 +65,25 @@ export function updateStatus() {
   };
 }
 
+/**
+ * Surveille le résultat des vérifications (faites par systemd, en root) : appelle onChange à chaque
+ * changement d'état, par exemple quand une nouvelle version est disponible.
+ */
+export function watchUpdates(onChange) {
+  if (!updateSupported()) return;
+  let last = '';
+  const check = () => {
+    const u = updateStatus();
+    const key = `${u.state}|${u.latest}|${u.pending}`;
+    if (key === last) return;
+    const first = !last;
+    last = key;
+    onChange(u, { first });
+  };
+  check();
+  fs.watchFile(path.join(UPD, 'status.env'), { interval: 30_000 }, check);
+}
+
 export function requestUpdate(mode) {
   if (!updateSupported()) {
     throw Object.assign(new Error('Les mises à jour automatiques sont disponibles sur l\'installation Linux (conteneur LXC).'), { status: 400 });
