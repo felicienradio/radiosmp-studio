@@ -41,6 +41,7 @@ Fonctionne dans un **conteneur LXC Debian** (Proxmox) comme sous Windows.
 - **Personnalisation** : nom, logos, couleurs, police et thème, depuis le dashboard
 - **Buffer par flux** : « Faible latence » (buffer 0) ou « Démarrage instantané »
 - **Flux en HTTPS** relayés par le dashboard (`https://ton-domaine/live`), démarrage rapide du son (burst de 5 s à 320 kbps)
+- **Comptes** avec pseudo et mot de passe, rôles administrateur / animateur / lecture seule
 - **Mises à jour depuis GitHub** en un clic, vérification automatique toutes les heures et notification quand une version sort
 
 ## Installation dans un conteneur LXC Proxmox (Debian 12 / 13)

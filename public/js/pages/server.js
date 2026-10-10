@@ -156,14 +156,12 @@ export default function serverPage(view, { store, onLive }) {
             <button class="btn" data-geo="country">${icon('download')} Pays seulement (${data.geo.sizes.country})</button>
           </div>
         </div>
-        <form class="card" id="pwd-form">
-          <div class="card-head"><h2>Mot de passe du dashboard</h2></div>
-          <div class="form-grid">
-            <label class="field">Actuel<input type="password" name="current" required autocomplete="current-password"></label>
-            <label class="field">Nouveau<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
-          </div>
-          <button class="btn mt" type="submit">Changer le mot de passe</button>
-        </form>
+        <div class="card">
+          <div class="card-head"><h2>Comptes du dashboard</h2></div>
+          <p class="muted" style="margin-top:0">Chaque personne a son pseudo et son mot de passe, avec un rôle : administrateur, animateur ou lecture seule.
+            Votre propre mot de passe se change dans <b>Mon compte</b>, en bas du menu.</p>
+          <a class="btn" href="#/utilisateurs">${icon('users')} Gérer les comptes</a>
+        </div>
       </div>
 
       <div class="card mt">
@@ -228,10 +226,6 @@ export default function serverPage(view, { store, onLive }) {
       data = await run(e.target.querySelector('[type=submit]'), () => api('/server/settings', { method: 'PUT', body }), 'Réglages enregistrés');
       store.process = data.process;
       render();
-    }
-    if (e.target.id === 'pwd-form') {
-      await run(e.target.querySelector('[type=submit]'), () => api('/dashboard/password', { method: 'POST', body: formData(e.target) }), 'Mot de passe modifié');
-      e.target.reset();
     }
   });
 

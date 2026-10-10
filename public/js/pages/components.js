@@ -67,16 +67,16 @@ export function mountCard(m, { actions = true, access = false } = {}) {
         <span class="k">${icon('lock')}</span><span class="small"><b>Accès diffusion</b> <span class="dim">(propre à ce flux)</span></span>
         <span class="k">Utilisateur</span><span><code>${m.username || 'source'}</code></span>
         <span class="k">Mot de passe</span><span class="row" style="gap:4px">${m.password ? secret(m.password) : html`<span class="badge warn">mot de passe global</span>`}
-          <button class="copy" data-act="regen" data-id="${m.id}" data-name="${m.name}" title="Générer un nouveau mot de passe">${icon('refresh')}</button></span>
+          <button class="copy admin-only" data-act="regen" data-id="${m.id}" data-name="${m.name}" title="Générer un nouveau mot de passe">${icon('refresh')}</button></span>
       </div>` : ''}
       ${actions ? html`<div class="row">
         <button class="btn sm" data-act="details" data-name="${m.name}">${icon('link')} Connexion</button>
-        ${live ? html`<button class="btn sm" data-act="metadata" data-name="${m.name}">${icon('tag')} Titre</button>` : ''}
+        ${live ? html`<button class="btn sm dj-only" data-act="metadata" data-name="${m.name}">${icon('tag')} Titre</button>` : ''}
         ${m.configured
-          ? html`<button class="btn sm" data-act="edit" data-id="${m.id}">${icon('edit')} Modifier</button>`
-          : html`<button class="btn sm" data-act="configure" data-name="${m.name}">${icon('settings')} Configurer</button>`}
-        ${live ? html`<button class="btn sm danger" data-act="kill" data-name="${m.name}">${icon('power')} Couper</button>` : ''}
-        ${m.configured && access ? html`<button class="btn sm ghost icon danger" data-act="delete" data-id="${m.id}" title="Supprimer ce point de montage" style="margin-left:auto">${icon('trash')}</button>` : ''}
+          ? html`<button class="btn sm admin-only" data-act="edit" data-id="${m.id}">${icon('edit')} Modifier</button>`
+          : html`<button class="btn sm admin-only" data-act="configure" data-name="${m.name}">${icon('settings')} Configurer</button>`}
+        ${live ? html`<button class="btn sm danger admin-only" data-act="kill" data-name="${m.name}">${icon('power')} Couper</button>` : ''}
+        ${m.configured && access ? html`<button class="btn sm ghost icon danger admin-only" data-act="delete" data-id="${m.id}" title="Supprimer ce point de montage" style="margin-left:auto">${icon('trash')}</button>` : ''}
       </div>` : ''}
     </div>`;
 }
@@ -92,7 +92,7 @@ export function listenerRow(l, { kick = true } = {}) {
     <td class="truncate dim small" title="${l.userAgent}">${l.userAgent || '—'}</td>
     <td class="num nowrap" data-since="${l.startedAt}">${fmtDuration(l.duration)}</td>
     <td class="nowrap dim small">${fmtTime(l.startedAt)}</td>
-    ${kick ? html`<td class="right"><button class="btn sm ghost danger" data-kick="${l.id}" data-mount="${l.mount}" title="Déconnecter">${icon('kick')}</button></td>` : ''}
+    ${kick ? html`<td class="right"><button class="btn sm ghost danger admin-only" data-kick="${l.id}" data-mount="${l.mount}" title="Déconnecter">${icon('kick')}</button></td>` : ''}
   </tr>`;
 }
 

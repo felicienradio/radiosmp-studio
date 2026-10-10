@@ -34,7 +34,7 @@ export default function autodjPage(view, { store, onLive, params, topbar }) {
   function renderTopbar() {
     topbar.innerHTML = String(html`<div class="seg" id="st-tabs">${stations.map((x) => html`<button data-station="${x.id}" class="${x.id === selectedId ? 'active' : ''}">
         ${x.state === 'playing' ? html`<span class="dot live" style="background:var(--ok)"></span> ` : ''}${x.name}</button>`)}</div>
-      <button class="btn primary" id="new-station">${icon('plus')} Nouvelle station</button>`);
+      <button class="btn primary admin-only" id="new-station">${icon('plus')} Nouvelle station</button>`);
   }
 
   function setupNeeded(st) {
@@ -113,7 +113,7 @@ export default function autodjPage(view, { store, onLive, params, topbar }) {
   }
 
   function settingsCard(st) {
-    return html`<form class="card mt" id="station-form">
+    return html`<form class="card mt admin-only" id="station-form">
       <div class="card-head"><h2>Flux de sortie et réglages</h2><div class="spacer"></div>
         <button type="button" class="btn danger sm" data-act="delete">${icon('trash')} Supprimer la station</button>
         <button class="btn primary" type="submit">Enregistrer</button></div>
@@ -171,7 +171,7 @@ export default function autodjPage(view, { store, onLive, params, topbar }) {
       return;
     }
     view.innerHTML = String(html`
-      ${setupNeeded(st) ? html`<div class="banner"><div class="grow"><b>Flux à configurer dans Icecast.</b>
+      ${setupNeeded(st) ? html`<div class="banner admin-only"><div class="grow"><b>Flux à configurer dans Icecast.</b>
         <span class="muted">Crée les points de montage ${st.outputs.map((o) => html`<code>${o.mount}</code> `)}${st.liveMount
           ? html`et déclare <code>${st.outputs[0]?.mount}</code> comme secours de <code>${st.liveMount}</code> : un animateur qui se connecte sur ${st.liveMount} prend l'antenne, la station reprend quand il coupe.`
           : ''}</span></div>

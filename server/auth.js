@@ -1,23 +1,14 @@
+// Connexion au dashboard : comptes avec pseudo et mot de passe (voir users.js), session dans un cookie signé.
 import crypto from 'node:crypto';
 import { getSettings, updateSettings } from './settings.js';
 import { branding } from './branding.js';
+import {
+  ROLES, can, findUser, getUserRow, publicUser, userCount, createUser, verifyPassword, markLogin,
+  migrateLegacyPassword, changeOwnPassword, listUsers, updateUser, deleteUser,
+} from './users.js';
 
 const COOKIE = 'flux_session';
 const MAX_AGE = 30 * 86400_000;
-
-export function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
-  return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
-}
-
-export function verifyPassword(password, stored) {
-  if (!stored) return false;
-  const [, salt, hash] = stored.split('$');
-  const expected = Buffer.from(hash, 'hex');
-  const actual = crypto.scryptSync(password, Buffer.from(salt, 'hex'), expected.length);
-  return crypto.timingSafeEqual(expected, actual);
-}
 
 function sign(payload) {
   const { sessionSecret } = getSettings().dashboard;
@@ -30,24 +21,26 @@ function readCookie(req) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-function isAuthed(req) {
+// « v » change quand le mot de passe du compte change : ses sessions ouvertes sont alors fermées
+const passwordVersion = (u) => u.password_hash.slice(-12);
+
+/** Compte connecté (ou null). */
+export function currentUser(req) {
   const value = readCookie(req);
-  if (!value) return false;
+  if (!value) return null;
   const [payload, sig] = value.split('.');
-  if (!payload || !sig) return false;
+  if (!payload || !sig) return null;
   const expected = sign(payload);
-  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
-  const { exp, v } = JSON.parse(Buffer.from(payload, 'base64url').toString());
-  // "v" change quand le mot de passe change : toutes les sessions existantes sont invalidées
-  return exp > Date.now() && v === passwordVersion();
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  let data;
+  try { data = JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch { return null; }
+  if (!data.uid || data.exp <= Date.now()) return null;
+  const u = getUserRow(data.uid);
+  return u && data.v === passwordVersion(u) ? u : null;
 }
 
-function passwordVersion() {
-  return (getSettings().dashboard.passwordHash || '').slice(-12);
-}
-
-function setSession(req, res) {
-  const payload = Buffer.from(JSON.stringify({ exp: Date.now() + MAX_AGE, v: passwordVersion() })).toString('base64url');
+function setSession(req, res, u) {
+  const payload = Buffer.from(JSON.stringify({ uid: u.id, exp: Date.now() + MAX_AGE, v: passwordVersion(u) })).toString('base64url');
   const secure = req.secure ? '; Secure' : '';
   res.setHeader('Set-Cookie', `${COOKIE}=${payload}.${sign(payload)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${MAX_AGE / 1000}${secure}`);
 }
@@ -61,30 +54,54 @@ function tooManyAttempts(ip) {
   return list.length >= 10;
 }
 
-export function authRoutes(app) {
+const sendError = (res, err) => res.status(err.status || 400).json({ error: err.message });
+
+export function authRoutes(app, { logEvent }) {
+  // Ancienne version : le mot de passe unique devient le compte « admin »
+  if (migrateLegacyPassword(getSettings().dashboard.passwordHash)) {
+    updateSettings((s) => { s.dashboard.legacyAdmin = true; });
+  }
+
   app.get('/api/auth/state', (req, res) => {
     const { name, slogan, theme } = branding();
-    res.json({ needsSetup: !getSettings().dashboard.passwordHash, authed: isAuthed(req), branding: { name, slogan, theme } });
+    const u = currentUser(req);
+    res.json({
+      needsSetup: !userCount(),
+      authed: !!u,
+      user: u ? publicUser(u) : null,
+      // après la mise à jour, le mot de passe d'avant se saisit avec le pseudo « admin »
+      legacyHint: !!getSettings().dashboard.legacyAdmin,
+      branding: { name, slogan, theme },
+    });
   });
 
+  // Première installation : création du compte administrateur
   app.post('/api/auth/setup', (req, res) => {
-    if (getSettings().dashboard.passwordHash) return res.status(400).json({ error: 'Le mot de passe est déjà défini' });
-    const { password } = req.body || {};
-    if (!password || password.length < 8) return res.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères' });
-    updateSettings((s) => { s.dashboard.passwordHash = hashPassword(password); });
-    setSession(req, res);
-    res.json({ ok: true });
+    if (userCount()) return res.status(400).json({ error: 'Le dashboard est déjà configuré' });
+    try {
+      const u = createUser({ username: req.body?.username, password: req.body?.password, role: 'admin' });
+      setSession(req, res, getUserRow(u.id));
+      markLogin(u.id);
+      logEvent('info', 'auth', `Compte administrateur « ${u.username} » créé`);
+      res.json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
   });
 
   app.post('/api/auth/login', (req, res) => {
     if (tooManyAttempts(req.ip)) return res.status(429).json({ error: 'Trop de tentatives, réessayez dans 15 minutes' });
-    const { password } = req.body || {};
-    if (!password || !verifyPassword(password, getSettings().dashboard.passwordHash)) {
+    const { username, password } = req.body || {};
+    const u = findUser(username);
+    if (!u || !password || !verifyPassword(password, u.password_hash)) {
       failures.get(req.ip).push(Date.now());
-      return res.status(401).json({ error: 'Mot de passe incorrect' });
+      return res.status(401).json({ error: 'Pseudo ou mot de passe incorrect' });
     }
     failures.delete(req.ip);
-    setSession(req, res);
+    setSession(req, res, u);
+    markLogin(u.id);
+    if (getSettings().dashboard.legacyAdmin) updateSettings((s) => { delete s.dashboard.legacyAdmin; });
+    logEvent('info', 'auth', `Connexion de ${u.username}`);
     res.json({ ok: true });
   });
 
@@ -95,17 +112,51 @@ export function authRoutes(app) {
 }
 
 export function requireAuth(req, res, next) {
-  if (isAuthed(req)) return next();
-  res.status(401).json({ error: 'Non connecté' });
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: 'Non connecté' });
+  req.user = u;
+  next();
 }
 
-export function changePassword(req, res) {
-  const { current, password } = req.body || {};
-  if (!verifyPassword(current || '', getSettings().dashboard.passwordHash)) {
-    return res.status(400).json({ error: 'Mot de passe actuel incorrect' });
-  }
-  if (!password || password.length < 8) return res.status(400).json({ error: 'Le nouveau mot de passe doit faire au moins 8 caractères' });
-  updateSettings((s) => { s.dashboard.passwordHash = hashPassword(password); });
-  setSession(req, res);
-  res.json({ ok: true });
+/** Vérifie que le rôle du compte autorise la requête. */
+export function authorize(req, res, next) {
+  if (can(req.user.role, req.method, req.baseUrl + req.path)) return next();
+  res.status(403).json({ error: 'Action réservée à un administrateur' });
+}
+
+/** Mon compte et gestion des utilisateurs (administrateurs). */
+export function accountRoutes(app, { wrap, logEvent }) {
+  app.get('/api/account', wrap((req) => ({ user: publicUser(req.user), roles: ROLES })));
+  app.post('/api/account/password', (req, res) => {
+    try {
+      changeOwnPassword(req.user.id, req.body?.current, req.body?.password);
+      setSession(req, res, getUserRow(req.user.id));
+      res.json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.get('/api/users', wrap(() => ({ users: listUsers(), roles: ROLES })));
+  app.post('/api/users', wrap((req) => {
+    const u = createUser(req.body || {});
+    logEvent('info', 'auth', `Compte « ${u.username} » (${ROLES[u.role]}) créé par ${req.user.username}`);
+    return u;
+  }));
+  app.put('/api/users/:id', (req, res) => {
+    try {
+      const u = updateUser(req.params.id, req.body || {});
+      logEvent('info', 'auth', `Compte « ${u.username} » modifié par ${req.user.username}`);
+      // Son propre mot de passe changé : la session est renouvelée pour rester connecté
+      if (u.id === req.user.id) setSession(req, res, getUserRow(u.id));
+      res.json(u);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+  app.delete('/api/users/:id', wrap((req) => {
+    if (Number(req.params.id) === req.user.id) throw Object.assign(new Error('Vous ne pouvez pas supprimer votre propre compte'), { status: 400 });
+    const u = deleteUser(req.params.id);
+    logEvent('info', 'auth', `Compte « ${u.username} » supprimé par ${req.user.username}`);
+  }));
 }

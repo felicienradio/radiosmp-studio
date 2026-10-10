@@ -497,3 +497,9 @@ p svg, .small svg, .hint svg, td svg:not(.btn svg) { width: 14px; height: 14px; 
 /* Pastille « mise à jour disponible » dans le menu */
 .nav .update-dot { background: var(--accent); color: #fff; }
 .nav .update-dot[hidden] { display: none; }
+
+/* Comptes : ce qu'un rôle ne peut pas faire n'est pas affiché */
+body.role-dj .admin-only, body.role-viewer .admin-only, body.role-viewer .dj-only { display: none !important; }
+.account-btn { justify-content: flex-start; text-align: left; height: auto; padding: 8px 10px; }
+.account-btn > span { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.account-btn b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

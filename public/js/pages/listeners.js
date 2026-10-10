@@ -12,7 +12,7 @@ export default function listenersPage(view, { store, onLive, topbar }) {
   let search = '';
   let lastMounts = null;
 
-  topbar.innerHTML = String(html`<button class="btn" id="move-btn">${icon('move')} Déplacer des auditeurs</button>`);
+  topbar.innerHTML = String(html`<button class="btn admin-only" id="move-btn">${icon('move')} Déplacer des auditeurs</button>`);
   $('#move-btn', topbar).addEventListener('click', openMove);
 
   view.innerHTML = String(html`

@@ -10,7 +10,7 @@ import { IcecastProcess, LOG_DIR, readTail } from './icecast/process.js';
 import { Collector } from './collector.js';
 import * as stats from './stats.js';
 import { initGeo, geoStatus, downloadGeo, lookup } from './geo.js';
-import { authRoutes, requireAuth, changePassword } from './auth.js';
+import { authRoutes, requireAuth, authorize, accountRoutes } from './auth.js';
 import { relayStream, relayStatus, playlist, relayCount } from './streamproxy.js';
 import { updateStatus, requestUpdate, watchUpdates } from './update.js';
 import { brandingRoutes } from './branding.js';
@@ -73,8 +73,10 @@ const wrap = (fn) => async (req, res) => {
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 
-authRoutes(app);
-app.use('/api', requireAuth);
+authRoutes(app, { logEvent });
+// Toute l'API demande d'être connecté, et chaque rôle n'a accès qu'à ce qui le concerne (voir users.js)
+app.use('/api', requireAuth, authorize);
+accountRoutes(app, { wrap, logEvent });
 brandingRoutes(app, { requireAuth, logEvent });
 
 // Adresse publique des flux : déduite automatiquement la première fois que le dashboard est ouvert
@@ -117,7 +119,8 @@ proc.on('state', (status) => broadcast('process', status));
 setInterval(() => broadcast('ping', Date.now()), 25_000);
 // Nouvelle version sur GitHub : notification en direct dans le dashboard et ligne dans le journal
 watchUpdates((u, { first }) => {
-  broadcast('update', u);
+  // Envoyé à tous les comptes connectés : seulement l'état, pas le journal ni la clé de déploiement
+  broadcast('update', { state: u.state, latest: u.latest, commits: u.commits, supported: u.supported });
   if (!first && u.state === 'available') {
     logEvent('info', 'config', `Nouvelle version disponible : ${u.commits[0]?.subject || u.latest?.slice(0, 7) || ''}`);
   }
@@ -214,7 +217,14 @@ function archivedMounts() {
     .sort((a, b) => b.last - a.last);
 }
 
-app.get('/api/mounts', wrap(() => ({ mounts: mountsView(), archived: archivedMounts(), process: proc.status(), connection: connectionInfo() })));
+app.get('/api/mounts', wrap((req) => {
+  const role = req.user.role;
+  const connection = connectionInfo();
+  // Le mot de passe source global n'est montré qu'aux administrateurs ; les comptes en lecture seule ne voient aucun mot de passe
+  if (role !== 'admin') delete connection.sourcePassword;
+  const mounts = role === 'viewer' ? mountsView().map((m) => ({ ...m, password: m.password ? '••••••••' : '' })) : mountsView();
+  return { mounts, archived: archivedMounts(), process: proc.status(), connection };
+}));
 
 app.post('/api/mounts', wrap((req) => {
   const m = cleanMount(req.body);
@@ -436,7 +446,6 @@ app.post('/api/geo/download', wrap(async (req) => {
   return geoStatus();
 }));
 
-app.post('/api/dashboard/password', changePassword);
 
 app.get('/api/update', wrap(() => updateStatus()));
 app.post('/api/update/check', wrap(() => { requestUpdate('check'); return updateStatus(); }));

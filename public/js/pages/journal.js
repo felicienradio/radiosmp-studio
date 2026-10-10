@@ -15,7 +15,7 @@ export default function journalPage(view) {
   view.innerHTML = String(html`
     <div class="tabs">
       <button data-tab="events" class="active">Événements</button>
-      ${LOGS.map(([k, l]) => html`<button data-tab="${k}">${l}</button>`)}
+      ${LOGS.map(([k, l]) => html`<button class="admin-only" data-tab="${k}">${l}</button>`)}
     </div>
     <div id="pane"></div>`);
 

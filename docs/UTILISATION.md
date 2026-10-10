@@ -15,7 +15,26 @@
 | **Personnalisation** | Nom, logos, couleurs, police et thème du dashboard |
 | **Titres diffusés** | Ce qui passe à l'antenne, l'historique des titres et les plus diffusés, avec les auditeurs gagnés ou perdus pendant chaque titre |
 | **Journal** | Connexions et coupures des sources, pannes, changements de configuration, logs d'Icecast |
-| **Serveur** | Démarrer / arrêter Icecast, réglages (nom d'hôte, port, mots de passe, limites, fuseau horaire), géolocalisation, mot de passe du dashboard |
+| **Serveur** | Démarrer / arrêter Icecast, réglages (nom d'hôte, port, mots de passe, limites, fuseau horaire), géolocalisation |
+| **Utilisateurs** | Comptes du dashboard (pseudo + mot de passe) et leur rôle : administrateur, animateur, lecture seule |
+
+## Les comptes
+
+Chaque personne se connecte avec **son pseudo et son mot de passe**. Les comptes se gèrent sur la page **Utilisateurs**
+(administrateurs seulement), chacun avec un rôle :
+
+| Rôle | Ce qu'il peut faire |
+|---|---|
+| **Administrateur** | Tout : serveur, flux, comptes, personnalisation, mises à jour |
+| **Animateur** | AutoDJ (démarrer, passer, file d'attente, playlists de la station, grille), playlists, bibliothèque, points cue, titre en cours, statistiques |
+| **Lecture seule** | Tableau de bord, statistiques, rapport, titres diffusés, journal. Aucun mot de passe visible |
+
+- Chacun change son mot de passe dans **Mon compte**, en bas du menu.
+- Si un administrateur change le mot de passe d'un compte ou le supprime, les sessions ouvertes de ce compte sont fermées.
+- Les connexions et les changements de comptes sont notés dans le **Journal**.
+- Après la mise à jour qui a ajouté les comptes, l'ancien mot de passe unique devient le compte **`admin`**.
+- **Mot de passe perdu** : dans le conteneur, lance
+  `cd /opt/flux && runuser -u flux -- node scripts/reset-admin.js admin NouveauMotDePasse`.
 
 ## Créer un point de montage
 

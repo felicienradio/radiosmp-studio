@@ -206,7 +206,7 @@ export function bindMountActions(root, reload) {
 
 export default function mountsPage(view, { store, onLive, topbar }) {
   let data = null;
-  topbar.innerHTML = String(html`<button class="btn primary" id="new-mount">${icon('plus')} Nouveau point de montage</button>`);
+  topbar.innerHTML = String(html`<button class="btn primary admin-only" id="new-mount">${icon('plus')} Nouveau point de montage</button>`);
   $('#new-mount', topbar).addEventListener('click', async () => {
     if (await openMountEditor()) load();
   });
@@ -230,7 +230,7 @@ export default function mountsPage(view, { store, onLive, topbar }) {
         <div class="table-wrap mt"><table><tbody>${data.archived.map((a) => html`<tr>
           <td><code>${a.mount}</code></td><td class="dim small">${fmtNum(a.sessions)} écoute${a.sessions > 1 ? 's' : ''}</td>
           <td class="dim small">dernière activité ${fmtDateTime(a.last)}</td>
-          <td class="right"><button class="btn sm ghost danger" data-purge="${a.mount}">${icon('trash')} Effacer l'historique</button></td></tr>`)}
+          <td class="right"><button class="btn sm ghost danger admin-only" data-purge="${a.mount}">${icon('trash')} Effacer l'historique</button></td></tr>`)}
         </tbody></table></div></div>` : ''}`);
   }
 

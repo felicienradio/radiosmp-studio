@@ -87,7 +87,8 @@ Puis suis [Installer dans un conteneur existant](#installer-dans-un-conteneur-ex
 
 ## Premier lancement
 
-1. Ouvre `http://IP-DU-CONTENEUR:3000` et **choisis le mot de passe** du dashboard.
+1. Ouvre `http://IP-DU-CONTENEUR:3000` et **crée le compte administrateur** (pseudo + mot de passe). Les autres comptes
+   (animateurs, lecture seule) se créent ensuite sur la page **Utilisateurs**.
 2. Page **Serveur** :
    - **Nom d'hôte public** : ton nom de domaine (ex. `icecast.radiosmp.fr`) ou ton IP publique ;
    - **Adresse publique des flux (HTTPS)** : ex. `https://icecast.radiosmp.fr` (voir [Flux en HTTPS](#flux-en-https)) ;
@@ -175,7 +176,7 @@ Les réglages, mots de passe et statistiques (`/opt/flux/data`) sont toujours co
 | Logs Icecast | `tail -f /opt/flux/data/icecast/log/error.log` |
 | Config Icecast générée | `cat /opt/flux/data/icecast/icecast.xml` |
 | Signal de test sur /live | `apt-get install -y ffmpeg && cd /opt/flux && runuser -u flux -- npm run test-source -- /live` |
-| Mot de passe du dashboard oublié | `systemctl stop flux && runuser -u flux -- node -e "const f='/opt/flux/data/settings.json',s=require(f);s.dashboard.passwordHash=null;require('fs').writeFileSync(f,JSON.stringify(s,null,2))" && systemctl start flux` puis rouvrir le dashboard |
+| Mot de passe du dashboard oublié | `cd /opt/flux && runuser -u flux -- node scripts/reset-admin.js admin NouveauMotDePasse` : remet le mot de passe du compte `admin` (ou crée ce compte administrateur s'il n'existe pas), sans redémarrer |
 
 **[Proxmox]**
 
