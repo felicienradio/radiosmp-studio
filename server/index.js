@@ -490,8 +490,14 @@ app.use('/vendor/leaflet', express.static(path.join(ROOT, 'node_modules/leaflet/
 app.use('/vendor/world-atlas', express.static(path.join(ROOT, 'node_modules/world-atlas'), { maxAge: '7d' }));
 app.use('/vendor/topojson', express.static(path.join(ROOT, 'node_modules/topojson-client/dist')));
 app.use('/vendor/flag-icons', express.static(path.join(ROOT, 'node_modules/flag-icons'), { maxAge: '7d' }));
-app.use(express.static(path.join(ROOT, 'public'), { index: 'index.html' }));
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));
+// Pages et scripts du dashboard : toujours revérifiés, pour qu'une mise à jour soit prise en compte sans vider le cache
+app.use(express.static(path.join(ROOT, 'public'), {
+  index: 'index.html',
+  setHeaders: (res, file) => {
+    if (/\.(html|js|css)$/.test(file)) res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  },
+}));
+app.get(/^\/(?!api\/).*/, (req, res) => res.set('Cache-Control', 'no-cache, must-revalidate').sendFile(path.join(ROOT, 'public', 'index.html')));
 
 // ---------- Démarrage ----------
 
