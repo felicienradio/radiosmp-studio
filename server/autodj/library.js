@@ -44,7 +44,8 @@ export function displayTitle(m) {
 export function probe(file) {
   return new Promise((resolve, reject) => {
     execFile('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-select_streams', 'a:0', file],
-      { windowsHide: true, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
+      // 2 min : un gros fichier sur un serveur occupé (analyse des points cue en cours) peut être long à lire
+      { windowsHide: true, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
         if (err) return reject(err);
         try {
           const j = JSON.parse(out);
@@ -81,13 +82,31 @@ export async function importUpload(req) {
   fs.mkdirSync(MUSIC_DIR, { recursive: true });
   const file = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
   const full = path.join(MUSIC_DIR, file);
-  await pipeline(req, fs.createWriteStream(full));
+  // Envoi coupé en route : on ne garde pas un fichier incomplet
+  try {
+    await pipeline(req, fs.createWriteStream(full));
+  } catch {
+    fs.rmSync(full, { force: true });
+    throw fail(`Envoi de « ${original} » interrompu, réessayez`);
+  }
+  const expected = Number(req.get('content-length'));
+  const size = fs.statSync(full).size;
+  if (expected && size !== expected) {
+    fs.rmSync(full, { force: true });
+    throw fail(`Envoi de « ${original} » incomplet (${size} octets reçus sur ${expected}), réessayez`);
+  }
+  if (!size) {
+    fs.rmSync(full, { force: true });
+    throw fail(`« ${original} » est vide`);
+  }
 
   let info;
   try {
     info = await probe(full);
-  } catch {
+  } catch (err) {
     fs.rmSync(full, { force: true });
+    if (err.code === 'ENOENT') throw fail('ffprobe est introuvable : installez ffmpeg (apt install ffmpeg)', 500);
+    if (err.killed) throw fail(`Lecture de « ${original} » trop longue (serveur occupé), réessayez`, 503);
     throw fail(`« ${original} » n'est pas un fichier audio lisible`);
   }
   const guess = fromFilename(original);

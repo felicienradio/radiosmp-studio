@@ -4,8 +4,20 @@ import { openCueEditor, cueSummary } from '../cue-editor.js';
 
 const ACCEPT = '.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.wav,audio/*';
 
-/** Envoie un fichier directement dans la playlist, avec suivi de progression. */
-function upload(file, playlistId, onProgress) {
+/** Envoie un fichier dans la playlist ; réessaie tout seul (2 fois) après une coupure réseau ou un serveur occupé. */
+async function upload(file, playlistId, onProgress) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await uploadOnce(file, playlistId, onProgress);
+    } catch (err) {
+      if (!err.retry || attempt >= 3) throw err;
+      onProgress(0);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+}
+
+function uploadOnce(file, playlistId, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/autodj/media?playlist=${playlistId}`);
@@ -15,10 +27,15 @@ function upload(file, playlistId, onProgress) {
     xhr.onload = () => {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(new Error(data?.error || `Erreur ${xhr.status}`));
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      const msg = xhr.status === 413
+        ? 'Fichier trop lourd pour le proxy HTTPS (limite de Nginx / Cloudflare)'
+        : data?.error || `Erreur ${xhr.status}`;
+      // Serveur momentanément indisponible (redémarrage, proxy) : on réessaie
+      reject(Object.assign(new Error(msg), { retry: [502, 503, 504].includes(xhr.status) || /interrompu|incomplet|occupé/.test(msg) }));
     };
-    xhr.onerror = () => reject(new Error('Connexion interrompue'));
+    xhr.onerror = () => reject(Object.assign(new Error('Connexion interrompue'), { retry: true }));
+    xhr.ontimeout = xhr.onerror;
     xhr.send(file);
   });
 }

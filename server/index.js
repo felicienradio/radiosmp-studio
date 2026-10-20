@@ -509,6 +509,9 @@ const server = app.listen(port, host, async () => {
   collector.start();
   autodj.startEnabled().catch((err) => console.error('AutoDJ :', err.message));
 });
+// Envoi de musiques : Node coupe par défaut une requête au bout de 5 min, trop court pour un gros fichier
+// sur une connexion lente. Les flux relayés (connexions longues) ne sont pas concernés par cette limite.
+server.requestTimeout = 60 * 60_000;
 server.on('error', (err) => {
   console.error(`Impossible d'écouter sur ${host}:${port} : ${err.message}`);
   process.exit(1);
