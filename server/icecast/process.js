@@ -117,7 +117,23 @@ export class IcecastProcess extends EventEmitter {
   }
 
   /** Au démarrage du dashboard : reprend un Icecast déjà lancé ou le démarre. */
+  /**
+   * Fait de la place : supprime les journaux archivés par Icecast (access.log.20261020_101500…)
+   * et vide console.log au-delà de 20 Mo.
+   */
+  cleanLogs() {
+    try {
+      for (const f of fs.readdirSync(LOG_DIR)) {
+        if (/\.log\.\d{8}_\d{6}$/.test(f)) fs.rmSync(path.join(LOG_DIR, f), { force: true });
+      }
+      const cons = path.join(LOG_DIR, 'console.log');
+      if (fs.existsSync(cons) && fs.statSync(cons).size > 20 * 1024 * 1024) fs.truncateSync(cons, 0);
+    } catch {}
+  }
+
   async init() {
+    this.cleanLogs();
+    setInterval(() => this.cleanLogs(), 6 * 3600_000).unref();
     const ice = this.getConfig();
     if (!ice.managed) return;
     const pid = Number(fs.existsSync(PID_FILE) ? fs.readFileSync(PID_FILE, 'utf8') : 0);

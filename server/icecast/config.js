@@ -134,7 +134,8 @@ ${mounts.filter((m) => m.relayUrl).map((m) => relayXml(m, legacy)).join('\n')}
         <errorlog>error.log</errorlog>
         <loglevel>${legacy ? 3 : 'information'}</loglevel>
         <logsize>10000</logsize>
-        <logarchive>1</logarchive>
+        <!-- 0 : une seule ancienne version (.old) ; 1 archivait sans fin et remplissait le disque -->
+        <logarchive>0</logarchive>
     </logging>
 
     <security>
