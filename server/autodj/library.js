@@ -195,6 +195,18 @@ async function drain() {
 }
 export const analysisPending = () => pending.length + (analysing ? 1 : 0);
 
+/** Supprime (fichier compris) les titres de la liste qui ne sont plus dans aucune playlist. Renvoie leur nombre. */
+export function deleteOrphans(ids) {
+  const inPlaylist = db.prepare('SELECT 1 FROM playlist_items WHERE media_id = ? LIMIT 1');
+  let n = 0;
+  for (const id of new Set(ids)) {
+    if (inPlaylist.get(id) || !getMedia(id)) continue;
+    deleteMedia(id);
+    n++;
+  }
+  return n;
+}
+
 export function libraryStats() {
   return db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(duration), 0) AS duration, COALESCE(SUM(size), 0) AS size FROM media').get();
 }

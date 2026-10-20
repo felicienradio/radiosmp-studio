@@ -42,9 +42,16 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
     items: lib.listMedia(String(req.query.q || '')), stats: lib.libraryStats(), analysing: lib.analysisPending(),
     autoCue: autodjConfig().autoCue !== false,
   })));
+  // Envoi d'une musique, directement dans une playlist (?playlist=ID)
   app.post('/api/autodj/media', wrap(async (req) => {
+    const target = req.query.playlist ? pl.getPlaylist(req.query.playlist) : null;
+    if (req.query.playlist && !target) throw lib.fail('Playlist introuvable', 404);
     const m = await lib.importUpload(req);
-    logEvent('info', 'autodj', `Ajouté à la bibliothèque : ${lib.displayTitle(m)}`);
+    if (target) {
+      pl.addItems(target.id, [m.id]);
+      autodj.resetAll();
+    }
+    logEvent('info', 'autodj', `Ajouté${target ? ` à la playlist « ${target.name} »` : ''} : ${lib.displayTitle(m)}`);
     // Points cue automatiques en tâche de fond
     if (autodjConfig().autoCue !== false) lib.queueAutoCue([m.id]);
     return m;
@@ -89,14 +96,21 @@ export function autodjRoutes(app, { wrap, autodj, logEvent, proc }) {
     autodj.resetAll();
     return p;
   }));
+  // Les musiques n'existent que dans les playlists : celles qui ne sont plus dans aucune playlist sont supprimées
   app.delete('/api/autodj/playlists/:id', wrap((req) => {
+    const before = pl.playlistMediaIds(req.params.id);
     pl.deletePlaylist(req.params.id);
+    const removed = lib.deleteOrphans(before);
     autodj.resetAll();
+    return { removedFiles: removed };
   }));
   app.put('/api/autodj/playlists/:id/items', wrap((req) => {
+    const before = pl.playlistMediaIds(req.params.id);
     const p = pl.setItems(req.params.id, req.body?.mediaIds);
+    const kept = new Set(p.items.map((m) => m.id));
+    lib.deleteOrphans(before.filter((id) => !kept.has(id)));
     autodj.resetAll();
-    return p;
+    return pl.getPlaylist(p.id);
   }));
   app.post('/api/autodj/playlists/:id/items', wrap((req) => {
     const p = pl.addItems(req.params.id, req.body?.mediaIds);

@@ -2,7 +2,7 @@ import { api, html, icon, $, run, modal, confirmDialog, fmtDateTime } from '../l
 
 const ROLE_HELP = {
   admin: 'Tout : serveur, flux, comptes, personnalisation, mises à jour.',
-  dj: 'AutoDJ (démarrer, passer, file d\'attente), playlists, bibliothèque, titre en cours, statistiques.',
+  dj: 'AutoDJ (démarrer, passer, file d\'attente), playlists et envoi de musiques, titre en cours, statistiques.',
   viewer: 'Consultation : tableau de bord, statistiques, rapport, titres diffusés. Aucun mot de passe visible.',
 };
 const ROLE_BADGE = { admin: 'accent', dj: 'ok', viewer: '' };

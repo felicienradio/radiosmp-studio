@@ -188,7 +188,7 @@ export default function autodjPage(view, { store, onLive, params, topbar }) {
               <td class="num dim">${m.duration ? fmtClock(m.duration) : ''}</td><td class="dim small truncate">${m.playlist || ''}</td></tr>`)}
             ${!st.queue.length && !st.upcoming.length ? html`<tr><td class="empty">Rien de prévu</td></tr>` : ''}
           </tbody></table></div>
-          <p class="dim small" style="padding:0 20px 14px;margin:0">Pour passer un titre précis ensuite : Bibliothèque → bouton ${icon('queue')}.</p>
+          <p class="dim small" style="padding:0 20px 14px;margin:0">Pour passer un titre précis ensuite : Playlists → bouton ${icon('queue')} du titre.</p>
         </div>
         <div class="card flush">
           <div class="card-head"><h3>Derniers titres</h3></div>
@@ -289,7 +289,7 @@ export default function autodjPage(view, { store, onLive, params, topbar }) {
         return;
       }
       if (act === 'delete') {
-        if (!await confirmDialog(`Supprimer la station « ${st.name} » ?`, 'La station s\'arrête, ses réglages, ses playlists associées et sa grille horaire sont supprimés. Les playlists et la musique restent dans la bibliothèque, et les points de montage dans Icecast.', { confirm: 'Supprimer', danger: true })) return;
+        if (!await confirmDialog(`Supprimer la station « ${st.name} » ?`, 'La station s\'arrête, ses réglages, ses playlists associées et sa grille horaire sont supprimés. Les playlists et leurs musiques sont conservées, ainsi que les points de montage dans Icecast.', { confirm: 'Supprimer', danger: true })) return;
         await run(a, () => api(`/autodj/stations/${st.id}`, { method: 'DELETE' }), 'Station supprimée').catch(() => null);
         selectedId = null;
         history.replaceState(null, '', '#/autodj');

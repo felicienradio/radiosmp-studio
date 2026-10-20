@@ -16,7 +16,8 @@ export function getPlaylist(id) {
   const p = db.prepare('SELECT * FROM playlists WHERE id = ?').get(Number(id));
   if (!p) return null;
   p.items = db.prepare(`
-    SELECT m.* FROM playlist_items i JOIN media m ON m.id = i.media_id
+    SELECT m.*, (SELECT COUNT(*) FROM playlist_items j WHERE j.media_id = m.id) AS in_playlists
+    FROM playlist_items i JOIN media m ON m.id = i.media_id
     WHERE i.playlist_id = ? ORDER BY i.position`).all(p.id);
   return p;
 }

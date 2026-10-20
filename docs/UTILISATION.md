@@ -11,7 +11,6 @@
 | **Rapport d'audience** | Le rapport complet, mis en page, à exporter en PDF |
 | **AutoDJ** | Diffusion automatique 24 h/24 : titre en cours, à suivre, passer un titre, réglages, grille horaire |
 | **Playlists** | Créer des playlists de musique ou de jingles, en ordre ou en aléatoire |
-| **Bibliothèque** | Envoyer vos musiques (glisser-déposer), les écouter, les ranger dans des playlists |
 | **Personnalisation** | Nom, logos, couleurs, police et thème du dashboard |
 | **Titres diffusés** | Ce qui passe à l'antenne, l'historique des titres et les plus diffusés, avec les auditeurs gagnés ou perdus pendant chaque titre |
 | **Journal** | Connexions et coupures des sources, pannes, changements de configuration, logs d'Icecast |
@@ -26,7 +25,7 @@ Chaque personne se connecte avec **son pseudo et son mot de passe**. Les comptes
 | Rôle | Ce qu'il peut faire |
 |---|---|
 | **Administrateur** | Tout : serveur, flux, comptes, personnalisation, mises à jour |
-| **Animateur** | AutoDJ (démarrer, passer, file d'attente, playlists de la station, grille), playlists, bibliothèque, points cue, titre en cours, statistiques |
+| **Animateur** | AutoDJ (démarrer, passer, file d'attente, playlists de la station, grille), playlists et envoi de musiques, points cue, titre en cours, statistiques |
 | **Lecture seule** | Tableau de bord, statistiques, rapport, titres diffusés, journal. Aucun mot de passe visible |
 
 - Chacun change son mot de passe dans **Mon compte**, en bas du menu.
@@ -85,11 +84,12 @@ Dans *Stream*, choisis MP3 ou AAC, 128 ou 192 kbps. Pour que le titre s'affiche,
 Comme sur AzuraCast, l'AutoDJ fonctionne par **stations** : chaque station diffuse sa propre programmation sur
 ses propres flux. Par exemple, *RadioSMP AutoDJ* en secours de `/live`, et une station *Rap* 24 h/24 sur `/rap`.
 
-1. **Bibliothèque** : glisse tes fichiers (MP3, AAC/M4A, OGG, Opus, FLAC, WAV) dans la zone d'envoi.
-   Titre et artiste sont lus dans les tags du fichier, sinon dans son nom (« Artiste - Titre.mp3 »). Modifiables ensuite (✎).
-2. **Playlists** : crée tes playlists (ex. *Hits*, *Rap US*, *Chill*), choisis *Aléatoire* ou *Dans l'ordre*,
-   puis **Ajouter des titres**. Pour les jingles, crée une playlist de type « Jingles ».
-   Une même playlist peut servir à plusieurs stations.
+1. **Playlists** : crée tes playlists (ex. *Hits*, *Rap US*, *Chill*), choisis *Aléatoire* ou *Dans l'ordre*,
+   puis **glisse tes fichiers directement dans la playlist** (MP3, AAC/M4A, OGG, Opus, FLAC, WAV).
+   Titre et artiste sont lus dans les tags du fichier, sinon dans son nom (« Artiste - Titre.mp3 »), et modifiables (✎).
+   Pour les jingles, crée une playlist de type « Jingles ». Une musique peut aussi être ajoutée à une autre playlist
+   (**Depuis une autre playlist**) sans la renvoyer. Retirer un titre de sa dernière playlist supprime le fichier.
+2. Une même playlist peut servir à plusieurs stations.
 3. **AutoDJ** : un onglet par station en haut de la page, et **Nouvelle station** pour en ajouter une.
    - **Flux de sortie et réglages** :
      - le nom de la station ;
@@ -110,20 +110,19 @@ ses propres flux. Par exemple, *RadioSMP AutoDJ* en secours de `/live`, et une s
 
 Pendant la diffusion :
 - **Passer** saute au titre suivant ;
-- dans la Bibliothèque, le bouton « jouer ensuite » place un titre en tête de la file (*Demande*), sur la station de ton choix ;
+- dans une playlist, le bouton « jouer ensuite » place un titre en tête de la file (*Demande*), sur la station de ton choix ;
 - les titres joués apparaissent dans **Titres diffusés** et dans les statistiques comme ceux d'un animateur.
 
 ### Les points cue
 
-Chaque titre a trois repères, visibles dans la colonne **Cue** de la Bibliothèque et des Playlists :
+Chaque titre a trois repères, visibles dans la colonne **Cue** des Playlists :
 - **IN** (cue in) : là où le titre commence, ce qui saute le silence du début ;
 - **MIX** (enchaînement) : là où le titre suivant démarre, par-dessus la fin de celui-ci ;
 - **OUT** (cue out) : là où le titre s'arrête, ce qui coupe le silence de la fin.
 
 **Automatique** : chaque titre envoyé est analysé. Les silences sont coupés, et si la fin du titre est un fondu ou une
 résonance, le point MIX est placé là où le son baisse : le titre suivant commence pendant ce fondu. Un titre qui finit
-net s'enchaîne sans chevauchement. Pour analyser les titres déjà présents, utilise le bouton **Points cue automatiques**
-de la Bibliothèque.
+net s'enchaîne sans chevauchement. Les titres déjà présents sont analysés automatiquement au démarrage du dashboard.
 
 **À la main** : bouton ⏦ d'un titre. Glisse les repères sur la forme d'onde, ou tape les valeurs en secondes.
 - Clique sur l'onde pour écouter à cet endroit ; le bouton ↓ place un repère à la position de lecture.

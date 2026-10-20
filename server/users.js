@@ -1,6 +1,6 @@
 // Comptes du dashboard : pseudo + mot de passe, avec un rôle.
 //  - admin  : tout (serveur, flux, utilisateurs, personnalisation, mises à jour)
-//  - dj     : animateur, pilote l'AutoDJ (playlists, bibliothèque, file d'attente), change le titre, voit les stats
+//  - dj     : animateur, pilote l'AutoDJ (playlists et leurs musiques, file d'attente), change le titre, voit les stats
 //  - viewer : lecture seule (tableau de bord, statistiques, rapport)
 import crypto from 'node:crypto';
 import { db } from './db.js';

@@ -12,7 +12,6 @@ import report from './pages/report.js';
 import brandingPage from './pages/branding.js';
 import autodjPage from './pages/autodj.js';
 import playlistsPage from './pages/playlists.js';
-import libraryPage from './pages/library.js';
 import usersPage from './pages/users.js';
 
 const PAGES = [
@@ -23,7 +22,6 @@ const PAGES = [
   { path: 'rapport', label: 'Rapport d\'audience', icon: 'file', page: report },
   { path: 'autodj', label: 'AutoDJ', icon: 'disc', page: autodjPage, sep: true, roles: ['admin', 'dj'] },
   { path: 'playlists', label: 'Playlists', icon: 'queue', page: playlistsPage, roles: ['admin', 'dj'] },
-  { path: 'bibliotheque', label: 'Bibliothèque', icon: 'music', page: libraryPage, roles: ['admin', 'dj'] },
   { path: 'titres', label: 'Titres diffusés', icon: 'music', page: tracks, sep: true },
   { path: 'journal', label: 'Journal', icon: 'list', page: journal },
   { path: 'serveur', label: 'Serveur', icon: 'server', page: server, roles: ['admin'] },
